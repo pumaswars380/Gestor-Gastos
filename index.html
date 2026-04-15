@@ -1,0 +1,2415 @@
+<!DOCTYPE html>
+<html lang="es" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#1e293b">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    <title>Gestor de Gastos Mensuales</title>
+    
+    <!-- Cargamos Tailwind Primero -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Configuramos Tailwind correctamente para que escuche nuestras clases -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {}
+            }
+        }
+    </script>
+
+    <!-- Script de Inicialización del Tema -->
+    <script>
+        if (localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    </script>
+    
+    <script src="https://unpkg.com/lucide@0.460.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <style>
+        @keyframes slideInRight {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOutRight {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        .toast-enter { animation: slideInRight 0.3s ease-out forwards; }
+        .toast-exit { animation: slideOutRight 0.3s ease-in forwards; }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .autosave-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+        .expense-card {
+            border-left: 3px solid transparent;
+        }
+        .expense-card.overdue {
+            border-left-color: #f87171;
+        }
+        .expense-card.paid {
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans min-h-screen p-4 md:p-8 transition-colors duration-200">
+
+    <div id="toast-container" role="status" aria-live="polite" aria-atomic="true" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- Modales -->
+    <div id="confirm-modal" class="fixed inset-0 bg-slate-900/40 dark:bg-black/60 z-50 hidden items-center justify-center backdrop-blur-sm transition-opacity duration-200 opacity-0">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl p-6 max-w-sm w-full mx-4 transform transition-transform duration-200 scale-95 border border-transparent dark:border-slate-700">
+            <div class="flex items-center gap-3 mb-4 text-red-600 dark:text-red-400">
+                <div class="bg-red-100 dark:bg-red-900/30 p-2 rounded-full">
+                    <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+                </div>
+                <h3 class="text-lg font-bold text-slate-900 dark:text-white">¿Eliminar gasto?</h3>
+            </div>
+            <p id="delete-modal-text" class="text-slate-600 dark:text-slate-300 mb-6">Esta acción borrará el gasto permanentemente y no se puede deshacer.</p>
+            <div class="flex justify-end gap-3 hidden" id="delete-actions-normal">
+                <button onclick="closeDeleteConfirm()" class="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg font-medium transition-colors">Cancelar</button>
+                <button onclick="confirmDelete('single')" class="px-4 py-2 bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600 text-white rounded-lg font-medium transition-colors shadow-sm">Eliminar</button>
+            </div>
+            <div class="flex-col gap-2 hidden" id="delete-actions-group">
+                <button onclick="confirmDelete('single')" class="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-white rounded-lg font-medium transition-colors text-left flex justify-between items-center">
+                    <span>Eliminar solo esta cuota</span>
+                    <i data-lucide="minus-circle" class="w-4 h-4 opacity-50"></i>
+                </button>
+                <button onclick="confirmDelete('group')" class="w-full px-4 py-2.5 bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors text-left flex justify-between items-center">
+                    <span>Eliminar toda la serie de cuotas</span>
+                    <i data-lucide="trash-2" class="w-4 h-4 opacity-50"></i>
+                </button>
+                <button onclick="closeDeleteConfirm()" class="w-full px-4 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg font-medium transition-colors mt-2">
+                    Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="import-confirm-modal" class="fixed inset-0 bg-slate-900/40 dark:bg-black/60 z-50 hidden items-center justify-center backdrop-blur-sm transition-opacity duration-200 opacity-0">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl p-6 max-w-sm w-full mx-4 transform transition-transform duration-200 scale-95 border border-transparent dark:border-slate-700">
+            <div class="flex items-center gap-3 mb-4 text-amber-600 dark:text-amber-400">
+                <div class="bg-amber-100 dark:bg-amber-900/30 p-2 rounded-full">
+                    <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+                </div>
+                <h3 class="text-lg font-bold text-slate-900 dark:text-white" id="import-modal-title">¿Importar datos?</h3>
+            </div>
+            <p id="import-modal-text" class="text-slate-600 dark:text-slate-300 mb-2"></p>
+            <p id="import-modal-backup-note" class="text-xs text-emerald-600 dark:text-emerald-400 font-medium mb-6"></p>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeImportConfirm()" class="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg font-medium transition-colors">Cancelar</button>
+                <button onclick="proceedWithImport()" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 text-white rounded-lg font-medium transition-colors shadow-sm" id="import-confirm-btn">Importar</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto space-y-6">
+        
+        <!-- Encabezado -->
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-slate-900 dark:text-white">Gestor de Gastos</h1>
+                <p data-i18n="appSubtitle" class="text-slate-500 dark:text-slate-400">Administra tus pagos y cuotas del mes</p>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap">
+                <input type="file" id="import-json-input" accept=".json" class="hidden">
+                <button onclick="importFromJSON()" id="btn-import" aria-label="Importar respaldo JSON" class="flex items-center gap-2 bg-slate-600 hover:bg-slate-700 dark:bg-slate-600 dark:hover:bg-slate-500 text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm">
+                    <i data-lucide="upload" class="w-5 h-5"></i> Importar
+                </button>
+                <button onclick="exportToJSON()" id="btn-backup" aria-label="Exportar respaldo JSON" class="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 dark:bg-violet-500 dark:hover:bg-violet-600 text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm">
+                    <i data-lucide="archive" class="w-5 h-5"></i> Respaldar
+                </button>
+                <button onclick="toggleAutoSave()" id="btn-autosave" aria-label="Activar auto-guardado" class="flex items-center gap-2 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 h-[42px]">
+                    <i data-lucide="hard-drive" class="w-5 h-5" id="autosave-icon"></i>
+                    <span id="autosave-label">Auto-guardado</span>
+                </button>
+                <select id="currency-select" class="p-2.5 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-lg text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer h-[42px]">
+                    <option value="MXN">🇲🇽 MXN</option>
+                    <option value="USD">🇺🇸 USD</option>
+                    <option value="EUR">🇪🇺 EUR</option>
+                    <option value="COP">🇨🇴 COP</option>
+                    <option value="ARS">🇦🇷 ARS</option>
+                    <option value="CLP">🇨🇱 CLP</option>
+                    <option value="PEN">🇵🇪 PEN</option>
+                    <option value="BRL">🇧🇷 BRL</option>
+                    <option value="GBP">🇬🇧 GBP</option>
+                </select>
+                <button onclick="toggleLang()" id="lang-toggle" aria-label="Toggle language" class="px-3 py-2.5 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-medium shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors h-[42px]">
+                    🌐 EN
+                </button>
+                <button onclick="toggleTheme()" id="theme-toggle" aria-label="Alternar modo oscuro" class="p-2.5 rounded-lg bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm flex items-center justify-center w-[42px] h-[42px]">
+                    <i data-lucide="moon" id="theme-icon" class="w-5 h-5"></i>
+                </button>
+                <button onclick="toggleNotifications()" id="btn-notifications" aria-label="Activar notificaciones" class="relative p-2.5 rounded-lg bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm flex items-center justify-center w-[42px] h-[42px]" title="Notificaciones de vencimiento">
+                    <i data-lucide="bell" id="notif-icon" class="w-5 h-5"></i>
+                    <span id="notif-badge" class="hidden absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-slate-800"></span>
+                </button>
+                <button onclick="exportToCSV()" id="btn-export-csv" aria-label="Exportar a Sheets" class="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600 text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm">
+                    <i data-lucide="download" class="w-5 h-5"></i> Exportar a Sheets
+                </button>
+                <button onclick="exportToPDF()" id="btn-export-pdf" aria-label="Exportar a PDF" class="flex items-center gap-2 bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600 text-white px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm">
+                    <i data-lucide="file-text" class="w-5 h-5"></i> Exportar a PDF
+                </button>
+                
+                <!-- Botón de Ko-fi -->
+                <div class="flex items-center h-[42px] hover:opacity-90 transition-opacity">
+                    <script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
+                    <script type='text/javascript'>kofiwidget2.init('Support me on Ko-fi', '#0091ff', 'U6U21WVTHX');kofiwidget2.draw();</script>
+                </div>
+            </div>
+        </div>
+
+        <!-- Banner Recordatorio -->
+        <div id="backup-reminder-banner" class="hidden items-center gap-3 p-4 rounded-xl border font-medium text-sm bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400">
+            <i data-lucide="shield-alert" class="w-5 h-5 shrink-0"></i>
+            <span id="backup-reminder-text" class="flex-1">Llevas tiempo sin respaldar tus datos.</span>
+            <button onclick="exportToJSON(); dismissBackupReminder();" class="shrink-0 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors">Respaldar ahora</button>
+            <button onclick="dismissBackupReminder()" class="shrink-0 p-1 hover:bg-indigo-100 dark:hover:bg-indigo-800 rounded-lg transition-colors"><i data-lucide="x" class="w-4 h-4"></i></button>
+        </div>
+
+        <!-- Sección de Presupuesto -->
+        <div class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-3">
+                <div class="flex items-center gap-3">
+                    <div class="bg-indigo-100 dark:bg-indigo-900/50 p-2.5 rounded-full text-indigo-600 dark:text-indigo-400">
+                        <i data-lucide="target" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h2 id="budget-title" class="text-base font-semibold text-slate-900 dark:text-white">Presupuesto Mensual</h2>
+                        <p data-i18n="budgetSubtitle" class="text-xs text-slate-500 dark:text-slate-400">Compara tus gastos totales contra tu límite</p>
+                    </div>
+                </div>
+                <div class="relative w-full md:w-48">
+                    <span class="absolute left-3 top-2 text-slate-400 dark:text-slate-500">$</span>
+                    <input type="number" id="input-budget" min="0" step="100" placeholder="Ej. 15000" class="w-full pl-7 p-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all">
+                </div>
+            </div>
+            <div class="space-y-1.5">
+                <div class="flex justify-between text-sm">
+                    <span class="font-medium text-slate-600 dark:text-slate-300" id="budget-spent-text">Gastado/Comprometido: $0.00</span>
+                    <span class="font-bold text-slate-900 dark:text-white" id="budget-percent-text">0%</span>
+                </div>
+                <div class="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
+                    <div id="budget-progress-bar" class="h-3 rounded-full transition-all duration-500 w-0 bg-emerald-500"></div>
+                </div>
+                <p class="text-xs text-slate-500 dark:text-slate-400 text-right mt-1" id="budget-remaining-text">Quedan $0.00</p>
+            </div>
+        </div>
+
+        <!-- Cuadrícula de 6 Tarjetas de Métricas -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div class="lg:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+                
+                <!-- FILA 1 -->
+                <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center gap-4 h-full">
+                    <div class="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-full text-blue-600 dark:text-blue-400 shrink-0">
+                        <i data-lucide="dollar-sign" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p data-i18n="summaryTotal" class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Visible en Tabla</p>
+                        <p id="summary-total" role="status" class="text-2xl font-bold text-slate-900 dark:text-white">$0.00</p>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center gap-4 h-full">
+                    <div class="bg-amber-100 dark:bg-amber-900/30 p-3 rounded-full text-amber-600 dark:text-amber-400 shrink-0">
+                        <i data-lucide="alert-circle" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p data-i18n="summaryPending" class="text-sm font-medium text-slate-500 dark:text-slate-400">Pendiente de Pago</p>
+                        <p id="summary-pending" role="status" class="text-2xl font-bold text-amber-600 dark:text-amber-400">$0.00</p>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center gap-4 h-full">
+                    <div class="bg-emerald-100 dark:bg-emerald-900/30 p-3 rounded-full text-emerald-600 dark:text-emerald-400 shrink-0">
+                        <i data-lucide="check-circle" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p data-i18n="summaryPaid" class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Pagado</p>
+                        <p id="summary-paid" role="status" class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">$0.00</p>
+                    </div>
+                </div>
+
+                <!-- FILA 2 -->
+                <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center gap-4 h-full">
+                    <div class="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-full text-orange-600 dark:text-orange-400 shrink-0">
+                        <i data-lucide="calendar-clock" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p data-i18n="summaryMonthPending" class="text-sm font-medium text-slate-500 dark:text-slate-400">Pendiente (Mes Actual)</p>
+                        <p id="summary-month-pending" role="status" class="text-2xl font-bold text-orange-600 dark:text-orange-400">$0.00</p>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center gap-4 h-full">
+                    <div class="bg-teal-100 dark:bg-teal-900/30 p-3 rounded-full text-teal-600 dark:text-teal-400 shrink-0">
+                        <i data-lucide="calendar-check" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p data-i18n="summaryMonthPaid" class="text-sm font-medium text-slate-500 dark:text-slate-400">Pagado (Mes Actual)</p>
+                        <p id="summary-month-paid" role="status" class="text-2xl font-bold text-teal-600 dark:text-teal-400">$0.00</p>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center gap-4 h-full">
+                    <div class="bg-indigo-100 dark:bg-indigo-900/30 p-3 rounded-full text-indigo-600 dark:text-indigo-400 shrink-0">
+                        <i data-lucide="wallet" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p data-i18n="summaryMonthRemaining" class="text-sm font-medium text-slate-500 dark:text-slate-400">Presupuesto Restante</p>
+                        <p id="summary-month-remaining" role="status" class="text-2xl font-bold text-indigo-600 dark:text-indigo-400">$0.00</p>
+                    </div>
+                </div>
+
+            </div>
+            
+            <!-- Gráfico de Dona -->
+            <div class="lg:col-span-1 bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col items-center justify-center h-full min-h-[160px]">
+                <h3 data-i18n="chartTitle" class="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2 w-full text-left">Distribución por Categoría</h3>
+                <div class="relative w-full h-28 md:h-32 flex justify-center">
+                    <canvas id="expense-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard de Tendencias -->
+        <div class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700" id="trends-section">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="bg-violet-100 dark:bg-violet-900/50 p-2.5 rounded-full text-violet-600 dark:text-violet-400">
+                        <i data-lucide="trending-up" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h2 data-i18n="trendsTitle" class="text-base font-semibold text-slate-900 dark:text-white">Tendencias Mensuales</h2>
+                        <p data-i18n="trendsSubtitle" class="text-xs text-slate-500 dark:text-slate-400">Evolución de tus gastos a lo largo del tiempo</p>
+                    </div>
+                </div>
+                <div class="flex bg-slate-200/60 dark:bg-slate-900/60 p-1 rounded-lg" role="group" aria-label="Rango de tendencias">
+                    <button onclick="setTrendsRange(6)" id="trends-range-6" aria-pressed="true" class="trends-range-btn whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-white dark:bg-slate-700 shadow-sm text-slate-800 dark:text-white">6 meses</button>
+                    <button onclick="setTrendsRange(12)" id="trends-range-12" aria-pressed="false" class="trends-range-btn whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium transition-all text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">12 meses</button>
+                    <button onclick="setTrendsRange(0)" id="trends-range-0" aria-pressed="false" class="trends-range-btn whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium transition-all text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">Todo</button>
+                </div>
+            </div>
+            <div class="relative w-full" style="height: 260px;">
+                <canvas id="trends-chart"></canvas>
+            </div>
+            <p id="trends-empty-msg" class="hidden text-center text-sm text-slate-400 dark:text-slate-500 py-8">
+                <i data-lucide="bar-chart-3" class="mx-auto mb-2 opacity-30 w-10 h-10"></i>
+                Agrega gastos en al menos 2 meses para ver tendencias.
+            </p>
+        </div>
+
+        <!-- Formulario de Agregar Gasto -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 transition-all relative overflow-hidden" id="form-container">
+            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2 text-slate-900 dark:text-white" id="form-title">
+                <i data-lucide="plus" class="text-blue-600 dark:text-blue-400 w-5 h-5"></i>
+                Registrar Nuevo Gasto
+            </h2>
+            <form id="expense-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 relative z-10">
+                <div class="space-y-1">
+                    <label data-i18n="lblProduct" class="text-sm font-medium text-slate-600 dark:text-slate-300">Producto/Servicio *</label>
+                    <input type="text" id="input-product" required class="w-full p-2 bg-transparent border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" placeholder="Ej. Luz, Agua, Netflix">
+                </div>
+                <div class="space-y-1">
+                    <label data-i18n="lblCategory" class="text-sm font-medium text-slate-600 dark:text-slate-300">Categoría *</label>
+                    <select id="input-category" required class="w-full p-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white appearance-none cursor-pointer">
+                        <option value="Vivienda">Vivienda</option>
+                        <option value="Alimentación">Alimentación</option>
+                        <option value="Suscripciones">Suscripciones</option>
+                        <option value="Transporte">Transporte</option>
+                        <option value="Salud">Salud</option>
+                        <option value="Deudas">Deudas</option>
+                        <option value="Otros" selected>Otros</option>
+                    </select>
+                </div>
+                <div class="space-y-1">
+                    <label id="label-amount" class="text-sm font-medium text-slate-600 dark:text-slate-300">Monto (Total) *</label>
+                    <div class="relative">
+                        <span class="absolute left-3 top-2.5 text-slate-400 dark:text-slate-500">$</span>
+                        <input type="number" id="input-amount" required min="0" step="0.01" class="w-full pl-8 p-2 bg-transparent border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="space-y-1">
+                    <label data-i18n="lblDate" class="text-sm font-medium text-slate-600 dark:text-slate-300">Fecha de (1er) Vencimiento *</label>
+                    <input type="date" id="input-date" required class="w-full p-2 bg-transparent border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" style="color-scheme: light dark;">
+                </div>
+                <div class="space-y-1">
+                    <label data-i18n="lblRecipient" class="text-sm font-medium text-slate-600 dark:text-slate-300">Destinatario</label>
+                    <input type="text" id="input-recipient" class="w-full p-2 bg-transparent border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" placeholder="Persona o Tarjeta">
+                </div>
+                <div class="space-y-1">
+                    <label data-i18n="lblNotes" class="text-sm font-medium text-slate-600 dark:text-slate-300">Notas / Método</label>
+                    <input type="text" id="input-notes" class="w-full p-2 bg-transparent border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" placeholder="Ej. Tarjeta de Crédito, Efectivo">
+                </div>
+                <div class="space-y-1 lg:col-span-1">
+                    <label data-i18n="lblDescription" class="text-sm font-medium text-slate-600 dark:text-slate-300">Descripción</label>
+                    <input type="text" id="input-description" class="w-full p-2 bg-transparent border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" placeholder="¿Por qué lo debo?">
+                </div>
+                <div class="space-y-1">
+                    <label data-i18n="lblInstallments" class="text-sm font-medium text-slate-600 dark:text-slate-300" title="Se generará automáticamente cada mes al marcar como pagado">N° de Cuotas (Meses)</label>
+                    <input type="number" id="input-installments" min="1" max="120" value="1" class="w-full p-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-white" placeholder="1 = Pago Único">
+                    <label class="flex items-center gap-2 mt-1 cursor-pointer select-none">
+                        <input type="checkbox" id="input-recurring" class="w-4 h-4 rounded accent-blue-600 cursor-pointer">
+                        <span data-i18n="lblRecurring" class="text-xs text-slate-500 dark:text-slate-400">Cargo recurrente (mensual)</span>
+                    </label>
+                </div>
+                <div class="flex items-center justify-end gap-3 md:col-span-2 lg:col-span-4 mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/50">
+                    <button type="button" id="cancel-btn" onclick="cancelEdit()" class="hidden w-full sm:w-auto px-6 py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg font-medium transition-colors">Cancelar</button>
+                    <button type="submit" id="submit-btn" class="w-full sm:w-auto px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm">Añadir Gasto</button>
+                </div>
+            </form>
+        </div>
+
+        <div id="budget-alert-banner" role="alert" class="hidden items-center gap-3 p-4 rounded-xl border font-medium text-sm">
+            <i data-lucide="alert-triangle" class="w-5 h-5 shrink-0"></i>
+            <span id="budget-alert-text"></span>
+        </div>
+
+        <!-- Tabla -->
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 overflow-hidden">
+            <div class="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                <div class="relative w-full lg:w-1/3">
+                    <i data-lucide="search" class="absolute left-3 top-2.5 text-slate-400 w-5 h-5"></i>
+                    <input type="text" id="search-input" aria-label="Buscar gasto por nombre o descripción" placeholder="Buscar gasto..." class="w-full pl-10 p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm dark:text-white">
+                </div>
+                <div class="relative w-full lg:w-1/4">
+                    <i data-lucide="calendar" class="absolute left-3 top-2.5 text-slate-400 w-5 h-5"></i>
+                    <select id="filter-month" aria-label="Filtrar por mes y año" class="w-full pl-10 p-2 pr-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm appearance-none cursor-pointer dark:text-white">
+                        <option value="All">Todos los meses</option>
+                    </select>
+                    <i data-lucide="chevron-down" class="absolute right-3 top-2.5 text-slate-400 w-5 h-5 pointer-events-none"></i>
+                </div>
+                <div class="relative w-full lg:w-1/5">
+                    <i data-lucide="tag" class="absolute left-3 top-2.5 text-slate-400 w-5 h-5"></i>
+                    <select id="filter-category" class="w-full pl-10 p-2 pr-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm appearance-none cursor-pointer dark:text-white">
+                        <option value="All" data-i18n-opt="allCategories">Todas las categorías</option>
+                        <option value="Vivienda" data-i18n-opt="catVivienda">Vivienda</option>
+                        <option value="Alimentación" data-i18n-opt="catAlimentacion">Alimentación</option>
+                        <option value="Suscripciones" data-i18n-opt="catSuscripciones">Suscripciones</option>
+                        <option value="Transporte" data-i18n-opt="catTransporte">Transporte</option>
+                        <option value="Salud" data-i18n-opt="catSalud">Salud</option>
+                        <option value="Deudas" data-i18n-opt="catDeudas">Deudas</option>
+                        <option value="Otros" data-i18n-opt="catOtros">Otros</option>
+                    </select>
+                    <i data-lucide="chevron-down" class="absolute right-3 top-2.5 text-slate-400 w-5 h-5 pointer-events-none"></i>
+                </div>
+                <div class="flex bg-slate-200/60 dark:bg-slate-900/60 p-1 rounded-lg w-full lg:w-auto overflow-x-auto" role="group" aria-label="Filtrar por estado de pago">
+                    <button onclick="setFilter('Todos')" id="filter-Todos" aria-pressed="true" class="filter-btn flex-1 whitespace-nowrap px-4 py-1.5 rounded-md text-sm font-medium transition-all bg-white dark:bg-slate-700 shadow-sm text-slate-800 dark:text-white">Todos</button>
+                    <button onclick="setFilter('Pendientes')" id="filter-Pendientes" aria-pressed="false" class="filter-btn flex-1 whitespace-nowrap px-4 py-1.5 rounded-md text-sm font-medium transition-all text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">Pendientes</button>
+                    <button onclick="setFilter('Pagados')" id="filter-Pagados" aria-pressed="false" class="filter-btn flex-1 whitespace-nowrap px-4 py-1.5 rounded-md text-sm font-medium transition-all text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">Pagados</button>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto hidden md:block">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-50/50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-sm">
+                            <th scope="col" data-i18n="colProduct" class="p-4 font-semibold">Producto / Servicio</th>
+                            <th scope="col" data-i18n="colRecipient" class="p-4 font-semibold">Dest. / Notas</th>
+                            <th scope="col" data-i18n="colAmount" class="p-4 font-semibold">Monto</th>
+                            <th scope="col" data-i18n="colDueDate" class="p-4 font-semibold">Vencimiento</th>
+                            <th scope="col" data-i18n="colInstallments" class="p-4 font-semibold text-center">Cuotas</th>
+                            <th scope="col" data-i18n="colStatus" class="p-4 font-semibold text-center">Estado</th>
+                            <th scope="col" data-i18n="colActions" class="p-4 font-semibold text-center">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expense-tbody"></tbody>
+                </table>
+            </div>
+            <div id="expense-cards-mobile" class="md:hidden divide-y divide-slate-100 dark:divide-slate-700/50"></div>
+            <div class="p-3 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
+                <span class="text-sm text-slate-500 dark:text-slate-400 font-medium" id="results-count" aria-live="polite" aria-atomic="true">Mostrando 0 gastos</span>
+                <nav id="pagination-controls" aria-label="Paginación" class="flex items-center gap-1"></nav>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const STRINGS = {
+            es: {
+                appTitle: 'Gestor de Gastos',
+                appSubtitle: 'Administra tus pagos y cuotas del mes',
+                btnImport: 'Importar',
+                btnBackup: 'Respaldar',
+                btnExport: 'Exportar a Sheets',
+                btnExportPDF: 'Exportar a PDF',
+                budgetTitle: 'Presupuesto',
+                budgetSubtitle: 'Compara tus gastos totales contra tu límite',
+                budgetPlaceholder: 'Ej. 15000',
+                budgetSpentPrefix: 'Gastado/Comprometido: ',
+                budgetRemaining: 'Quedan ',
+                budgetOverspent: 'Te excediste por ',
+                budgetDefine: 'Define un presupuesto arriba',
+                budgetCurrentMonth: 'Mes Actual',
+                budgetSelectedMonth: 'Mes Seleccionado',
+                chartTitle: 'Distribución por Categoría',
+                summaryTotal: 'Total Visible en Tabla',
+                summaryPending: 'Pendiente de Pago',
+                summaryPaid: 'Total Pagado',
+                summaryMonthPending: 'Pendiente (Mes Actual)',
+                summaryMonthPaid: 'Pagado (Mes Actual)',
+                summaryMonthRemaining: 'Presupuesto Restante',
+                summaryNoBudget: 'Sin Presupuesto',
+                formTitleAdd: 'Registrar Nuevo Gasto',
+                formTitleEdit: 'Editando Gasto',
+                lblProduct: 'Producto/Servicio *',
+                lblCategory: 'Categoría *',
+                lblAmount: 'Monto (Total) *',
+                lblAmountInstallment: 'Monto (Solo afectará esta cuota) *',
+                lblAmountEdit: 'Monto de este pago *',
+                lblDate: 'Fecha de (1er) Vencimiento *',
+                lblRecipient: 'Destinatario',
+                lblNotes: 'Notas / Método',
+                lblDescription: 'Descripción',
+                lblInstallments: 'N° de Cuotas (Meses)',
+                lblRecurring: 'Cargo recurrente (mensual)',
+                phProduct: 'Ej. Luz, Agua, Netflix',
+                phRecipient: 'Persona o Empresa',
+                phNotes: 'Ej. Tarjeta de Crédito, Efectivo',
+                phDescription: '¿Por qué lo debo?',
+                phBudget: 'Ej. 15000',
+                btnAdd: 'Añadir Gasto',
+                btnUpdate: 'Actualizar Gasto',
+                btnCancel: 'Cancelar',
+                searchPlaceholder: 'Buscar gasto...',
+                allMonths: 'Todos los meses',
+                filterAll: 'Todos',
+                filterPending: 'Pendientes',
+                filterPaid: 'Pagados',
+                colProduct: 'Producto / Servicio',
+                colRecipient: 'Dest. / Notas',
+                colNotes: 'Notas',
+                colAmount: 'Monto',
+                colDueDate: 'Vencimiento',
+                colInstallments: 'Cuotas',
+                colStatus: 'Estado',
+                colActions: 'Acciones',
+                statusPaid: 'Pagado',
+                statusPending: 'Pendiente',
+                badgeOverdue: 'Vencido',
+                badgeRecurring: '↻ Recurrente',
+                noExpenses: 'No tienes ningún gasto registrado. ¡Añade uno arriba!',
+                noResults: 'No se encontraron gastos con esos criterios.',
+                showingCount: 'Mostrando',
+                showingCountSuffix: 'gasto(s)',
+                installmentLabel: 'Cuota',
+                modalDeleteTitle: '¿Eliminar gasto?',
+                modalDeleteText: 'Esta acción borrará el gasto permanentemente y no se puede deshacer.',
+                modalDeleteSingle: 'Eliminar solo esta cuota',
+                modalDeleteGroup: 'Eliminar toda la serie de cuotas',
+                importConfirm: 'Esta acción reemplazará TODOS tus datos actuales. Asegúrate de tener un respaldo. ¿Deseas continuar?',
+                toastPaidNext: 'Pagado ✓ — Próximo cargo generado para',
+                toastPaidExists: 'Pagado ✓ — El cargo para',
+                toastPaidExistsSuffix: 'ya estaba generado',
+                toastMarkedAs: 'Marcado como',
+                toastDeleted: 'Gasto eliminado correctamente',
+                toastSeriesDeleted: 'Serie completa eliminada',
+                toastUpdated: 'Gasto actualizado correctamente',
+                toastSeriesUpdated: 'Cuota actualizada (Textos sincronizados en la serie)',
+                toastAdded: 'Gasto registrado con éxito',
+                toastInstallments: 'cuotas registradas',
+                toastCSV: 'Archivo CSV descargado',
+                toastPDF: 'Reporte PDF generado',
+                toastJSON: 'Respaldo JSON descargado',
+                toastImported: 'gastos importados correctamente',
+                toastStopRecurring: 'Cargo recurrente detenido',
+                toastInvalidAmount: 'Por favor, ingresa un monto válido mayor a 0.',
+                toastInvalidFile: 'Archivo inválido: no contiene gastos o formato incorrecto.',
+                toastReadError: 'Error al leer el archivo JSON.',
+                toastMonthReset: 'El mes seleccionado ya no tiene gastos. Mostrando todos.',
+                stopRecurringTitle: 'Detener recurrencia',
+                filterScopeNote: 'filtrando mes actual',
+                catVivienda: 'Vivienda',
+                catAlimentacion: 'Alimentación',
+                catSuscripciones: 'Suscripciones',
+                catTransporte: 'Transporte',
+                catSalud: 'Salud',
+                catDeudas: 'Deudas',
+                catOtros: 'Otros',
+                allCategories: 'Todas las categorías',
+                ariaEdit: 'Editar',
+                ariaDelete: 'Eliminar',
+                trendsTitle: 'Tendencias Mensuales',
+                trendsSubtitle: 'Evolución de tus gastos a lo largo del tiempo',
+                trends6m: '6 meses',
+                trends12m: '12 meses',
+                trendsAll: 'Todo',
+                trendsPaid: 'Pagado',
+                trendsPending: 'Pendiente',
+                trendsBudgetLine: 'Presupuesto',
+                trendsNoData: 'Agrega gastos en al menos 1 mes para ver tendencias.',
+                trendsTooltipTotal: 'Total',
+                autoSaveLabel: 'Auto-guardado',
+                autoSaveActive: 'Guardando...',
+                autoSaveOn: 'Auto ✓',
+                autoSaveOff: 'Auto-guardado',
+                autoSaveLastSaved: 'Último guardado',
+                autoSaveJustNow: 'ahora',
+                autoSaveMinAgo: 'min atrás',
+                autoSaveActivated: 'Auto-guardado activado — tu archivo se actualizará en cada cambio',
+                autoSaveDeactivated: 'Auto-guardado desactivado',
+                autoSaveError: 'Error al escribir el archivo. Auto-guardado desactivado.',
+                autoSaveNotSupported: 'Tu navegador no soporta auto-guardado. Usa "Respaldar" periódicamente.',
+                backupReminderText: 'Llevas tiempo sin respaldar tus datos. ¡No arriesgues tu información!',
+                backupReminderBtn: 'Respaldar ahora',
+                importModalTitle: '¿Importar datos?',
+                importModalText: 'Esta acción reemplazará TODOS tus datos actuales ({count} gastos). Esto no se puede deshacer.',
+                importModalBackupNote: '✓ Se creó un respaldo automático en tu navegador por seguridad.',
+                importModalBtn: 'Sí, importar',
+                importModalCancel: 'Cancelar',
+                notifEnabled: 'Notificaciones activadas',
+                notifDisabled: 'Notificaciones desactivadas',
+                notifDenied: 'Permiso de notificaciones denegado. Actívalo desde la configuración de tu navegador.',
+                notifNotSupported: 'Tu navegador no soporta notificaciones push.',
+                notifDueTitle: '⚠️ Pago vence hoy',
+                notifDueBody: 'vence hoy. Monto:',
+                notifOverdueTitle: '🔴 Pago vencido',
+                notifOverdueBody: 'está vencido. Monto:',
+                notifMultipleTitle: '⚠️ Tienes pagos pendientes',
+                notifMultipleBody: 'pago(s) vencen hoy o están vencidos.',
+                notifBtnLabel: 'Notificaciones',
+                notifInstallPWA: 'Instala esta app desde el menú de Chrome (⋮ → Instalar app) para recibir notificaciones incluso cuando la app esté cerrada.',
+            },
+            en: {
+                appTitle: 'Expense Manager',
+                appSubtitle: 'Manage your monthly bills and installments',
+                btnImport: 'Import',
+                btnBackup: 'Backup',
+                btnExport: 'Export to Sheets',
+                btnExportPDF: 'Export to PDF',
+                budgetTitle: 'Budget',
+                budgetSubtitle: 'Compare your total expenses against your limit',
+                budgetPlaceholder: 'e.g. 1500',
+                budgetSpentPrefix: 'Spent/Committed: ',
+                budgetRemaining: 'Remaining: ',
+                budgetOverspent: 'Over budget by ',
+                budgetDefine: 'Set a budget above',
+                budgetCurrentMonth: 'Current Month',
+                budgetSelectedMonth: 'Selected Month',
+                chartTitle: 'Category Breakdown',
+                summaryTotal: 'Visible in Table',
+                summaryPending: 'Pending Payment',
+                summaryPaid: 'Total Paid',
+                summaryMonthPending: 'Pending (Current Month)',
+                summaryMonthPaid: 'Paid (Current Month)',
+                summaryMonthRemaining: 'Remaining Budget',
+                summaryNoBudget: 'No Budget',
+                formTitleAdd: 'Add New Expense',
+                formTitleEdit: 'Editing Expense',
+                lblProduct: 'Product/Service *',
+                lblCategory: 'Category *',
+                lblAmount: 'Amount (Total) *',
+                lblAmountInstallment: 'Amount (This installment only) *',
+                lblAmountEdit: 'Amount for this payment *',
+                lblDate: 'First Due Date *',
+                lblRecipient: 'Recipient',
+                lblNotes: 'Notes / Method',
+                lblDescription: 'Description',
+                lblInstallments: 'No. of Installments',
+                lblRecurring: 'Recurring charge (monthly)',
+                phProduct: 'e.g. Electricity, Netflix',
+                phRecipient: 'Person or Company',
+                phNotes: 'e.g. Credit Card, Cash',
+                phDescription: 'Why do I owe this?',
+                phBudget: 'e.g. 1500',
+                btnAdd: 'Add Expense',
+                btnUpdate: 'Update Expense',
+                btnCancel: 'Cancel',
+                searchPlaceholder: 'Search expense...',
+                allMonths: 'All months',
+                filterAll: 'All',
+                filterPending: 'Pending',
+                filterPaid: 'Paid',
+                colProduct: 'Product / Service',
+                colRecipient: 'Recipient / Notes',
+                colNotes: 'Notes',
+                colAmount: 'Amount',
+                colDueDate: 'Due Date',
+                colInstallments: 'Installments',
+                colStatus: 'Status',
+                colActions: 'Actions',
+                statusPaid: 'Paid',
+                statusPending: 'Pending',
+                badgeOverdue: 'Overdue',
+                badgeRecurring: '↻ Recurring',
+                noExpenses: 'No expenses registered yet. Add one above!',
+                noResults: 'No expenses found matching those criteria.',
+                showingCount: 'Showing',
+                showingCountSuffix: 'expense(s)',
+                installmentLabel: 'Installment',
+                modalDeleteTitle: 'Delete expense?',
+                modalDeleteText: 'This action will permanently delete the expense and cannot be undone.',
+                modalDeleteSingle: 'Delete only this installment',
+                modalDeleteGroup: 'Delete the entire installment series',
+                importConfirm: 'This will replace ALL your current data. Make sure you have a backup. Continue?',
+                toastPaidNext: 'Paid ✓ — Next charge generated for',
+                toastPaidExists: 'Paid ✓ — Charge for',
+                toastPaidExistsSuffix: 'was already generated',
+                toastMarkedAs: 'Marked as',
+                toastDeleted: 'Expense deleted successfully',
+                toastSeriesDeleted: 'Full series deleted',
+                toastUpdated: 'Expense updated successfully',
+                toastSeriesUpdated: 'Installment updated (text synced across series)',
+                toastAdded: 'Expense added successfully',
+                toastInstallments: 'installments registered',
+                toastCSV: 'CSV file downloaded',
+                toastPDF: 'PDF report generated',
+                toastJSON: 'JSON backup downloaded',
+                toastImported: 'expenses imported successfully',
+                toastStopRecurring: 'Recurring charge stopped',
+                toastInvalidAmount: 'Please enter a valid amount greater than 0.',
+                toastInvalidFile: 'Invalid file: no expenses found or incorrect format.',
+                toastReadError: 'Error reading the JSON file.',
+                toastMonthReset: 'Selected month has no expenses. Showing all.',
+                stopRecurringTitle: 'Stop recurring',
+                filterScopeNote: 'filtering current month',
+                catVivienda: 'Housing',
+                catAlimentacion: 'Food',
+                catSuscripciones: 'Subscriptions',
+                catTransporte: 'Transport',
+                catSalud: 'Health',
+                catDeudas: 'Debts',
+                catOtros: 'Other',
+                allCategories: 'All categories',
+                ariaEdit: 'Edit',
+                ariaDelete: 'Delete',
+                trendsTitle: 'Monthly Trends',
+                trendsSubtitle: 'How your spending evolves over time',
+                trends6m: '6 months',
+                trends12m: '12 months',
+                trendsAll: 'All',
+                trendsPaid: 'Paid',
+                trendsPending: 'Pending',
+                trendsBudgetLine: 'Budget',
+                trendsNoData: 'Add expenses in at least 1 month to see trends.',
+                trendsTooltipTotal: 'Total',
+                autoSaveLabel: 'Auto-save',
+                autoSaveActive: 'Saving...',
+                autoSaveOn: 'Auto ✓',
+                autoSaveOff: 'Auto-save',
+                autoSaveLastSaved: 'Last saved',
+                autoSaveJustNow: 'just now',
+                autoSaveMinAgo: 'min ago',
+                autoSaveActivated: 'Auto-save activated — your file will update on every change',
+                autoSaveDeactivated: 'Auto-save deactivated',
+                autoSaveError: 'Error writing to file. Auto-save deactivated.',
+                autoSaveNotSupported: 'Your browser doesn\'t support auto-save. Use "Backup" periodically.',
+                backupReminderText: 'You haven\'t backed up your data in a while. Don\'t risk your info!',
+                backupReminderBtn: 'Backup now',
+                importModalTitle: 'Import data?',
+                importModalText: 'This will replace ALL your current data ({count} expenses). This cannot be undone.',
+                importModalBackupNote: '✓ An automatic backup was saved in your browser for safety.',
+                importModalBtn: 'Yes, import',
+                importModalCancel: 'Cancel',
+                notifEnabled: 'Notifications enabled',
+                notifDisabled: 'Notifications disabled',
+                notifDenied: 'Notification permission denied. Enable it from your browser settings.',
+                notifNotSupported: 'Your browser does not support push notifications.',
+                notifDueTitle: '⚠️ Payment due today',
+                notifDueBody: 'is due today. Amount:',
+                notifOverdueTitle: '🔴 Overdue payment',
+                notifOverdueBody: 'is overdue. Amount:',
+                notifMultipleTitle: '⚠️ You have pending payments',
+                notifMultipleBody: 'payment(s) are due today or overdue.',
+                notifBtnLabel: 'Notifications',
+                notifInstallPWA: 'Install this app from Chrome menu (⋮ → Install app) to receive notifications even when the app is closed.',
+            }
+        };
+
+        const CATEGORIES = {
+            'Vivienda': { color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400', hex: '#3b82f6' },
+            'Alimentación': { color: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400', hex: '#f97316' },
+            'Suscripciones': { color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400', hex: '#a855f7' },
+            'Transporte': { color: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400', hex: '#14b8a6' },
+            'Salud': { color: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400', hex: '#f43f5e' },
+            'Deudas': { color: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', hex: '#ef4444' },
+            'Otros': { color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-400', hex: '#64748b' }
+        };
+
+        const CURRENCY_LOCALES = {
+            'MXN': 'es-MX', 'USD': 'en-US', 'EUR': 'de-DE',
+            'COP': 'es-CO', 'ARS': 'es-AR', 'CLP': 'es-CL',
+            'PEN': 'es-PE', 'BRL': 'pt-BR', 'GBP': 'en-GB'
+        };
+
+        let editingId = null;
+        let expenseToDelete = null;
+        let currentFilter = 'Todos';
+        let expenseChartInstance = null;
+        let toggleLock = false;
+        let _modalEscapeHandler = null;
+        let _modalTabHandler = null;
+        let _modalTriggerElement = null;
+
+        let trendsChartInstance = null;
+        let trendsRange = 6; 
+
+        let currentPage = 1;
+        const ITEMS_PER_PAGE = 30;
+
+        let autoSaveFileHandle = null;
+        let autoSaveInterval = null;
+        let lastAutoSaveTime = null;
+        let autoSaveStatusInterval = null;
+        const supportsFileSystemAccess = ('showSaveFilePicker' in window);
+        
+        let changesSinceBackup = parseInt(localStorage.getItem('changes_since_backup') || '0');
+        let lastManualBackupTime = parseInt(localStorage.getItem('last_manual_backup') || '0');
+
+        let _importModalEscapeHandler = null;
+        let _importModalTabHandler = null;
+
+        const debounce = (fn, ms = 250) => {
+            let timer;
+            return (...args) => {
+                clearTimeout(timer);
+                timer = setTimeout(() => fn(...args), ms);
+            };
+        };
+
+        let selectedCurrency = localStorage.getItem('selected_currency') || 'MXN';
+        const currencySelect = document.getElementById('currency-select');
+        currencySelect.value = selectedCurrency;
+        currencySelect.addEventListener('change', (e) => {
+            selectedCurrency = e.target.value;
+            localStorage.setItem('selected_currency', selectedCurrency);
+            renderTable();
+        });
+
+        let currentLang = localStorage.getItem('selected_lang') || 'es';
+
+        const toggleLang = () => {
+            currentLang = currentLang === 'es' ? 'en' : 'es';
+            localStorage.setItem('selected_lang', currentLang);
+            applyLanguage();
+        };
+
+        const applyLanguage = () => {
+            const S = STRINGS[currentLang];
+            updateMonthDropdown();
+            document.documentElement.setAttribute('lang', currentLang);
+
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (S[key]) el.textContent = S[key];
+            });
+            document.querySelectorAll('[data-i18n-opt]').forEach(el => {
+                const key = el.getAttribute('data-i18n-opt');
+                if (S[key]) el.textContent = S[key];
+            });
+
+            document.querySelector('h1').textContent = S.appTitle;
+
+            const btnImport = document.getElementById('btn-import');
+            btnImport.innerHTML = `<i data-lucide="upload" class="w-5 h-5"></i> ${S.btnImport}`;
+            btnImport.setAttribute('aria-label', currentLang === 'es' ? 'Importar respaldo JSON' : 'Import JSON backup');
+
+            const btnBackup = document.getElementById('btn-backup');
+            btnBackup.innerHTML = `<i data-lucide="archive" class="w-5 h-5"></i> ${S.btnBackup}`;
+            btnBackup.setAttribute('aria-label', currentLang === 'es' ? 'Exportar respaldo JSON' : 'Export JSON backup');
+
+            const btnExportCSV = document.getElementById('btn-export-csv');
+            btnExportCSV.innerHTML = `<i data-lucide="download" class="w-5 h-5"></i> ${S.btnExport}`;
+            btnExportCSV.setAttribute('aria-label', currentLang === 'es' ? 'Exportar a Sheets' : 'Export to Sheets');
+
+            const btnExportPDF = document.getElementById('btn-export-pdf');
+            if (btnExportPDF) {
+                btnExportPDF.innerHTML = `<i data-lucide="file-text" class="w-5 h-5"></i> ${S.btnExportPDF}`;
+                btnExportPDF.setAttribute('aria-label', currentLang === 'es' ? 'Exportar a PDF' : 'Export to PDF');
+            }
+
+            document.getElementById('input-budget').placeholder = S.phBudget;
+
+            const catSelect = document.getElementById('input-category');
+            if (catSelect && catSelect.options.length >= 7) {
+                catSelect.options[0].textContent = S.catVivienda;
+                catSelect.options[1].textContent = S.catAlimentacion;
+                catSelect.options[2].textContent = S.catSuscripciones;
+                catSelect.options[3].textContent = S.catTransporte;
+                catSelect.options[4].textContent = S.catSalud;
+                catSelect.options[5].textContent = S.catDeudas;
+                catSelect.options[6].textContent = S.catOtros;
+            }
+
+            document.getElementById('input-product').placeholder = S.phProduct;
+            document.getElementById('input-recipient').placeholder = S.phRecipient;
+            document.getElementById('input-notes').placeholder = S.phNotes;
+            document.getElementById('input-description').placeholder = S.phDescription;
+
+            if (!editingId) {
+                document.getElementById('label-amount').textContent = S.lblAmount;
+                document.getElementById('submit-btn').textContent = S.btnAdd;
+                document.getElementById('cancel-btn').textContent = S.btnCancel;
+                document.getElementById('form-title').innerHTML = `<i data-lucide="plus" class="text-blue-600 dark:text-blue-400 w-5 h-5"></i> ${S.formTitleAdd}`;
+            }
+
+            document.getElementById('search-input').placeholder = S.searchPlaceholder;
+            document.getElementById('filter-Todos').textContent = S.filterAll;
+            document.getElementById('filter-Pendientes').textContent = S.filterPending;
+            document.getElementById('filter-Pagados').textContent = S.filterPaid;
+            document.getElementById('lang-toggle').textContent = currentLang === 'es' ? '🌐 EN' : '🌐 ES';
+
+            document.getElementById('trends-range-6').textContent = S.trends6m;
+            document.getElementById('trends-range-12').textContent = S.trends12m;
+            document.getElementById('trends-range-0').textContent = S.trendsAll;
+            document.getElementById('trends-empty-msg').innerHTML = `<i data-lucide="bar-chart-3" class="mx-auto mb-2 opacity-30 w-10 h-10"></i>${S.trendsNoData}`;
+
+            if (!autoSaveFileHandle) {
+                document.getElementById('autosave-label').textContent = S.autoSaveOff;
+            }
+
+            const reminderText = document.getElementById('backup-reminder-text');
+            if (reminderText) reminderText.textContent = S.backupReminderText;
+
+            const notifBtn = document.getElementById('btn-notifications');
+            if (notifBtn) notifBtn.title = S.notifBtnLabel;
+
+            lucide.createIcons();
+            renderTable();
+        };
+
+        const renderUI = () => {
+            updateMonthDropdown();
+            renderTable();
+        };
+
+        let monthlyBudget = parseFloat(localStorage.getItem('monthly_budget')) || 0;
+        const budgetInput = document.getElementById('input-budget');
+        budgetInput.value = monthlyBudget > 0 ? monthlyBudget : '';
+
+        const defaultExpenses = [
+            { id: '1', groupId: null, product: 'Suscripción Netflix', category: 'Suscripciones', description: 'Entretenimiento familiar', recipient: 'Tarjeta Visa **45', amount: 299, dueDate: '2026-03-28', installmentIndex: 1, installmentTotal: 1, status: 'Pagado', recurring: true },
+            { id: '2', groupId: 'group2', product: 'Laptop Nueva', category: 'Otros', description: 'Herramienta de trabajo', recipient: 'Amazon', amount: 125, dueDate: '2026-04-05', installmentIndex: 3, installmentTotal: 12, status: 'Pendiente', recurring: false },
+            { id: '3', groupId: null, product: 'Renta', category: 'Vivienda', description: 'Alquiler del departamento', recipient: 'Juan Pérez', amount: 8500, dueDate: '2026-04-01', installmentIndex: 1, installmentTotal: 1, status: 'Pendiente', recurring: true },
+            { id: '4', groupId: null, product: 'Supermercado', category: 'Alimentación', description: 'Despensa semanal', recipient: 'Walmart', amount: 1850, dueDate: '2026-02-15', installmentIndex: 1, installmentTotal: 1, status: 'Pagado', recurring: false },
+            { id: '5', groupId: null, product: 'Internet', category: 'Vivienda', description: 'Fibra óptica', recipient: 'Telmex', amount: 599, dueDate: '2026-02-20', installmentIndex: 1, installmentTotal: 1, status: 'Pagado', recurring: true },
+            { id: '6', groupId: null, product: 'Gasolina', category: 'Transporte', description: 'Tanque lleno', recipient: 'Pemex', amount: 1200, dueDate: '2026-01-10', installmentIndex: 1, installmentTotal: 1, status: 'Pagado', recurring: false },
+            { id: '7', groupId: null, product: 'Consulta médica', category: 'Salud', description: 'Chequeo general', recipient: 'Dr. García', amount: 800, dueDate: '2026-01-22', installmentIndex: 1, installmentTotal: 1, status: 'Pagado', recurring: false }
+        ];
+
+        let expenses;
+        try {
+            expenses = JSON.parse(localStorage.getItem('my_expenses')) || defaultExpenses;
+        } catch (error) {
+            console.error('Error al parsear los datos de localStorage.', error);
+            expenses = defaultExpenses;
+        }
+
+        const sanitizeField = (str) => {
+            if (!str) return '';
+            return String(str).replace(/<[^>]*?>/g, '').trim();
+        };
+
+        const normalizeExpense = (exp) => {
+            if (!exp || typeof exp !== 'object') return null;
+            const rootId = exp.recurringRootId || exp.sourceId || undefined;
+            let instTotal = parseInt(exp.installmentTotal) || 0;
+            if (!instTotal && exp.installments && exp.installments !== '') {
+                instTotal = parseInt(exp.installments) || 1;
+            }
+            if (instTotal < 1) instTotal = 1;
+            return {
+                id: String(exp.id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString())),
+                groupId: exp.groupId || null,
+                recurringRootId: rootId,
+                preferredDay: exp.preferredDay ? parseInt(exp.preferredDay) : undefined,
+                product: sanitizeField(exp.product || 'Sin nombre'),
+                category: (exp.category && CATEGORIES[exp.category]) ? exp.category : 'Otros',
+                description: sanitizeField(exp.description || ''),
+                recipient: sanitizeField(exp.recipient || ''),
+                notes: sanitizeField(exp.notes || ''),
+                amount: Math.max(0, parseFloat(exp.amount) || 0),
+                dueDate: /^\d{4}-\d{2}-\d{2}$/.test(exp.dueDate) ? exp.dueDate : new Date().toISOString().split('T')[0],
+                installmentIndex: Math.max(1, parseInt(exp.installmentIndex) || 1),
+                installmentTotal: instTotal,
+                status: ['Pagado', 'Pendiente'].includes(exp.status) ? exp.status : 'Pendiente',
+                recurring: exp.recurring === true,
+            };
+        };
+
+        expenses = expenses.map(normalizeExpense).filter(Boolean);
+
+        const saveToLocalStorage = (throwOnError = false) => {
+            try {
+                localStorage.setItem('my_expenses', JSON.stringify(expenses));
+            } catch (e) {
+                if (e.name === 'QuotaExceededError') {
+                    showToast('Storage full — export a backup and clear old data.', 'error');
+                }
+                if (throwOnError) throw e;
+                return false;
+            }
+
+            if (autoSaveFileHandle) {
+                writeToFileHandle();
+            }
+
+            changesSinceBackup++;
+            localStorage.setItem('changes_since_backup', changesSinceBackup);
+            checkBackupReminder();
+
+            return true;
+        };
+
+        const toggleTheme = () => {
+            const html = document.documentElement;
+            html.classList.toggle('dark');
+            const isDark = html.classList.contains('dark');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            
+            const btn = document.getElementById('theme-toggle');
+            btn.innerHTML = `<i data-lucide="${isDark ? 'sun' : 'moon'}" id="theme-icon" class="w-5 h-5"></i>`;
+            lucide.createIcons();
+            
+            renderUI();
+        };
+
+        const initThemeIcon = () => {
+            const isDark = document.documentElement.classList.contains('dark');
+            const btn = document.getElementById('theme-toggle');
+            if(btn) {
+                btn.innerHTML = `<i data-lucide="${isDark ? 'sun' : 'moon'}" id="theme-icon" class="w-5 h-5"></i>`;
+            }
+            lucide.createIcons();
+        };
+        initThemeIcon();
+
+        const showToast = (message, type = 'success') => {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgColors = { success: 'bg-emerald-600', error: 'bg-red-600', info: 'bg-blue-600', warning: 'bg-amber-500' };
+            const icons = { success: 'check-circle', error: 'alert-circle', info: 'info', warning: 'alert-triangle' };
+            toast.className = `toast-enter ${bgColors[type]} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3`;
+            toast.innerHTML = `<i data-lucide="${icons[type]}" class="w-5 h-5"></i><span class="font-medium text-sm">${escapeHTML(message)}</span>`;
+            container.appendChild(toast);
+            lucide.createIcons({ nameAttr: 'data-lucide' });
+            setTimeout(() => {
+                toast.classList.replace('toast-enter', 'toast-exit');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        };
+
+        const escapeHTML = (str) => {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        };
+
+        const formatCurrency = (amount) => {
+            const locale = CURRENCY_LOCALES[selectedCurrency] || 'es-MX';
+            return new Intl.NumberFormat(locale, { style: 'currency', currency: selectedCurrency }).format(amount);
+        };
+
+        const formatCurrencyShort = (amount) => {
+            const locale = CURRENCY_LOCALES[selectedCurrency] || 'es-MX';
+            if (Math.abs(amount) >= 1000) {
+                return new Intl.NumberFormat(locale, { style: 'currency', currency: selectedCurrency, maximumFractionDigits: 0 }).format(amount);
+            }
+            return new Intl.NumberFormat(locale, { style: 'currency', currency: selectedCurrency }).format(amount);
+        };
+
+        budgetInput.addEventListener('input', debounce((e) => {
+            monthlyBudget = Math.max(0, parseFloat(e.target.value) || 0);
+            localStorage.setItem('monthly_budget', monthlyBudget);
+            renderUI();
+        }, 300));
+
+        const updateBudgetProgress = (totalSpent) => {
+            const S = STRINGS[currentLang];
+            const bar = document.getElementById('budget-progress-bar');
+            const percentText = document.getElementById('budget-percent-text');
+            const spentText = document.getElementById('budget-spent-text');
+            const remainingText = document.getElementById('budget-remaining-text');
+            spentText.textContent = `${S.budgetSpentPrefix}${formatCurrency(totalSpent)}`;
+            if (monthlyBudget > 0) {
+                const percentage = (totalSpent / monthlyBudget) * 100;
+                percentText.textContent = `${percentage.toFixed(1)}%`;
+                let width = Math.min(percentage, 100);
+                bar.style.width = `${width}%`;
+                if (percentage <= 70) { bar.className = 'h-3 rounded-full transition-all duration-500 bg-emerald-500'; percentText.className = 'font-bold text-emerald-600 dark:text-emerald-400'; }
+                else if (percentage <= 90) { bar.className = 'h-3 rounded-full transition-all duration-500 bg-amber-500'; percentText.className = 'font-bold text-amber-600 dark:text-amber-400'; }
+                else { bar.className = 'h-3 rounded-full transition-all duration-500 bg-red-600 dark:bg-red-500'; percentText.className = 'font-bold text-red-600 dark:text-red-400'; }
+                const remaining = monthlyBudget - totalSpent;
+                if (remaining >= 0) { remainingText.textContent = `${S.budgetRemaining}${formatCurrency(remaining)}`; remainingText.className = "text-xs text-slate-500 dark:text-slate-400 text-right mt-1"; }
+                else { remainingText.textContent = `${S.budgetOverspent}${formatCurrency(Math.abs(remaining))}`; remainingText.className = "text-xs font-semibold text-red-500 dark:text-red-400 text-right mt-1"; }
+            } else {
+                percentText.textContent = '0%'; bar.style.width = '0%'; bar.className = 'h-3 rounded-full transition-all duration-500 bg-emerald-500';
+                remainingText.textContent = S.budgetDefine; percentText.className = 'font-bold text-slate-900 dark:text-white';
+                remainingText.className = "text-xs text-slate-500 dark:text-slate-400 text-right mt-1";
+            }
+            const banner = document.getElementById('budget-alert-banner');
+            const bannerText = document.getElementById('budget-alert-text');
+            if (monthlyBudget > 0) {
+                const pct = (totalSpent / monthlyBudget) * 100;
+                if (pct >= 100) {
+                    banner.className = 'flex items-center gap-3 p-4 rounded-xl border font-medium text-sm bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400';
+                    bannerText.textContent = currentLang === 'es' ? `⚠️ Límite de presupuesto alcanzado — te excediste por ${formatCurrency(totalSpent - monthlyBudget)}.` : `⚠️ Budget limit reached — you're over by ${formatCurrency(totalSpent - monthlyBudget)}.`;
+                } else if (pct >= 80) {
+                    banner.className = 'flex items-center gap-3 p-4 rounded-xl border font-medium text-sm bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400';
+                    bannerText.textContent = currentLang === 'es' ? `Atención: llevas el ${pct.toFixed(0)}% de tu presupuesto mensual (${formatCurrency(totalSpent)} de ${formatCurrency(monthlyBudget)}).` : `Heads up: you've used ${pct.toFixed(0)}% of your monthly budget (${formatCurrency(totalSpent)} of ${formatCurrency(monthlyBudget)}).`;
+                } else { banner.className = 'hidden items-center gap-3 p-4 rounded-xl border font-medium text-sm'; }
+            } else { banner.className = 'hidden items-center gap-3 p-4 rounded-xl border font-medium text-sm'; }
+        };
+
+        const updateMonthDropdown = () => {
+            const select = document.getElementById('filter-month');
+            const currentValue = select.value;
+            const monthsSet = new Set();
+            expenses.forEach(exp => {
+                const date = new Date(exp.dueDate + 'T12:00:00');
+                monthsSet.add(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
+            });
+            const sortedMonths = Array.from(monthsSet).sort().reverse();
+            let optionsHTML = `<option value="All">${STRINGS[currentLang].allMonths}</option>`;
+            sortedMonths.forEach(my => {
+                const [y, m] = my.split('-');
+                const date = new Date(y, m - 1);
+                let label = date.toLocaleDateString(currentLang === 'es' ? 'es-ES' : 'en-US', { month: 'long', year: 'numeric' });
+                label = label.charAt(0).toUpperCase() + label.slice(1);
+                optionsHTML += `<option value="${my}">${escapeHTML(label)}</option>`;
+            });
+            select.innerHTML = optionsHTML;
+            if (currentValue !== 'All' && !sortedMonths.includes(currentValue)) { select.value = 'All'; showToast(STRINGS[currentLang].toastMonthReset, 'info'); }
+            else if (sortedMonths.includes(currentValue)) { select.value = currentValue; }
+        };
+
+        const updateChart = (categoryTotals) => {
+            const S = STRINGS[currentLang];
+            const catMap = { 'Vivienda': S.catVivienda, 'Alimentación': S.catAlimentacion, 'Suscripciones': S.catSuscripciones, 'Transporte': S.catTransporte, 'Salud': S.catSalud, 'Deudas': S.catDeudas, 'Otros': S.catOtros };
+            const ctx = document.getElementById('expense-chart').getContext('2d');
+            const isDark = document.documentElement.classList.contains('dark');
+            const emptyColor = isDark ? '#334155' : '#e2e8f0';
+            let labels = [], data = [], bgColors = [], totalForChart = 0;
+            Object.keys(categoryTotals).forEach(cat => {
+                if (categoryTotals[cat] > 0) { labels.push(catMap[cat] || cat); data.push(categoryTotals[cat]); bgColors.push(CATEGORIES[cat].hex); totalForChart += categoryTotals[cat]; }
+            });
+            if (totalForChart === 0) { labels = [currentLang === 'es' ? 'Sin gastos' : 'No expenses']; data = [1]; bgColors = [emptyColor]; }
+            if (expenseChartInstance) {
+                expenseChartInstance.data.labels = labels; expenseChartInstance.data.datasets[0].data = data; expenseChartInstance.data.datasets[0].backgroundColor = bgColors; expenseChartInstance.update();
+            } else {
+                const orphaned = Chart.getChart(ctx.canvas);
+                if (orphaned) { orphaned.destroy(); }
+                expenseChartInstance = new Chart(ctx, { type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: bgColors, borderWidth: 0, hoverOffset: 4 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => { if (totalForChart === 0) return currentLang === 'es' ? ' Sin gastos' : ' No expenses'; return ' ' + formatCurrency(context.raw); } } } } } });
+            }
+        };
+
+        /* =====================================================================
+         * CORRECCIÓN PRINCIPAL: calculateMonthlyTrends
+         * 
+         * BUG ORIGINAL: La función tomaba los últimos N meses que tuvieran datos,
+         * sin importar la fecha actual. Si el usuario tenía cuotas futuras
+         * (ej. una laptop a 12 meses), los rangos de "6 meses" y "12 meses"
+         * mostraban meses lejanos en el futuro en lugar de meses cercanos al hoy.
+         *
+         * CORRECCIÓN: Ahora el rango se ancla a la fecha actual.
+         * - "6 meses"  → 4 meses pasados + mes actual + 1 mes futuro
+         * - "12 meses" → 9 meses pasados + mes actual + 2 meses futuros
+         * - "Todo"     → muestra todos los meses que tengan datos (sin cambio)
+         * ===================================================================== */
+        const calculateMonthlyTrends = (rangeMonths) => {
+            const monthMap = {};
+            expenses.forEach(exp => {
+                const d = new Date(exp.dueDate + 'T12:00:00');
+                const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                if (!monthMap[key]) monthMap[key] = { paid: 0, pending: 0 };
+                if (exp.status === 'Pagado') monthMap[key].paid += exp.amount;
+                else monthMap[key].pending += exp.amount;
+            });
+            let sortedKeys = Object.keys(monthMap).sort();
+
+            if (rangeMonths > 0) {
+                // Calcular ventana anclada a la fecha actual
+                const now = new Date();
+                const futureSlots = Math.max(1, Math.floor(rangeMonths * 0.2)); // ~20% futuro
+                const pastSlots = rangeMonths - futureSlots; // ~80% pasado (incluye mes actual)
+
+                const startDate = new Date(now.getFullYear(), now.getMonth() - (pastSlots - 1), 1);
+                const endDate = new Date(now.getFullYear(), now.getMonth() + futureSlots, 1);
+
+                const startKey = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+                const endKey = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}`;
+
+                sortedKeys = sortedKeys.filter(key => key >= startKey && key <= endKey);
+            }
+
+            return sortedKeys.map(key => ({
+                key,
+                paid: monthMap[key].paid,
+                pending: monthMap[key].pending,
+                total: monthMap[key].paid + monthMap[key].pending
+            }));
+        };
+
+        const setTrendsRange = (range) => {
+            trendsRange = range;
+            document.querySelectorAll('.trends-range-btn').forEach(btn => {
+                const isActive = btn.id === `trends-range-${range}`;
+                btn.setAttribute('aria-pressed', isActive);
+                if (isActive) {
+                    btn.classList.add('bg-white', 'dark:bg-slate-700', 'shadow-sm', 'text-slate-800', 'dark:text-white');
+                    btn.classList.remove('text-slate-500', 'dark:text-slate-400', 'hover:text-slate-800', 'dark:hover:text-white');
+                } else {
+                    btn.classList.remove('bg-white', 'dark:bg-slate-700', 'shadow-sm', 'text-slate-800', 'dark:text-white');
+                    btn.classList.add('text-slate-500', 'dark:text-slate-400', 'hover:text-slate-800', 'dark:hover:text-white');
+                }
+            });
+            updateTrendsChart();
+        };
+
+        /* =====================================================================
+         * CORRECCIÓN SECUNDARIA: updateTrendsChart
+         *
+         * Cambio 1: Se destruye y recrea la gráfica al cambiar de rango para 
+         *           evitar problemas de estado residual en Chart.js.
+         * Cambio 2: Se redujo el umbral mínimo de < 2 a < 1 para que se pueda
+         *           ver la gráfica con un solo mes de datos.
+         * ===================================================================== */
+        const updateTrendsChart = () => {
+            const S = STRINGS[currentLang];
+            const data = calculateMonthlyTrends(trendsRange);
+            const canvas = document.getElementById('trends-chart');
+            const emptyMsg = document.getElementById('trends-empty-msg');
+
+            if (data.length < 1) {
+                canvas.style.display = 'none';
+                emptyMsg.classList.remove('hidden');
+                if (trendsChartInstance) { trendsChartInstance.destroy(); trendsChartInstance = null; }
+                return;
+            }
+            canvas.style.display = 'block';
+            emptyMsg.classList.add('hidden');
+
+            const isDark = document.documentElement.classList.contains('dark');
+            const gridColor = isDark ? 'rgba(148,163,184,0.1)' : 'rgba(148,163,184,0.2)';
+            const textColor = isDark ? '#94a3b8' : '#64748b';
+
+            const labels = data.map(d => {
+                const [y, m] = d.key.split('-');
+                const date = new Date(y, m - 1);
+                return date.toLocaleDateString(currentLang === 'es' ? 'es-ES' : 'en-US', { month: 'short', year: '2-digit' });
+            });
+
+            const monthKeys = data.map(d => d.key);
+            const paidData = data.map(d => d.paid);
+            const pendingData = data.map(d => d.pending);
+            const budgetData = monthlyBudget > 0 ? data.map(() => monthlyBudget) : [];
+
+            // Siempre destruir y recrear para evitar bugs de estado
+            if (trendsChartInstance) {
+                trendsChartInstance.destroy();
+                trendsChartInstance = null;
+            }
+
+            const orphanedTrends = Chart.getChart(canvas);
+            if (orphanedTrends) { orphanedTrends.destroy(); }
+
+            trendsChartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: S.trendsPaid,
+                            data: paidData,
+                            backgroundColor: isDark ? 'rgba(52,211,153,0.7)' : 'rgba(16,185,129,0.75)',
+                            borderRadius: 4,
+                            stack: 'total',
+                            order: 2,
+                        },
+                        {
+                            label: S.trendsPending,
+                            data: pendingData,
+                            backgroundColor: isDark ? 'rgba(251,191,36,0.6)' : 'rgba(245,158,11,0.65)',
+                            borderRadius: 4,
+                            stack: 'total',
+                            order: 2,
+                        },
+                        ...(budgetData.length > 0 ? [{
+                            label: S.trendsBudgetLine,
+                            data: budgetData,
+                            type: 'line',
+                            borderColor: isDark ? '#f87171' : '#dc2626',
+                            borderWidth: 2,
+                            borderDash: [6, 4],
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            pointHoverBackgroundColor: isDark ? '#f87171' : '#dc2626',
+                            fill: false,
+                            stack: undefined,
+                            order: 1,
+                        }] : [])
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const idx = elements[0].index;
+                            const mk = trendsChartInstance._monthKeys;
+                            if (mk && mk[idx]) {
+                                document.getElementById('filter-month').value = mk[idx];
+                                currentPage = 1;
+                                renderTable();
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            stacked: true,
+                            grid: { display: false },
+                            ticks: { color: textColor, font: { size: 11 } }
+                        },
+                        y: {
+                            stacked: true,
+                            beginAtZero: true,
+                            grid: { color: gridColor },
+                            ticks: {
+                                color: textColor,
+                                font: { size: 11 },
+                                callback: (value) => formatCurrencyShort(value)
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            align: 'end',
+                            labels: {
+                                color: textColor,
+                                font: { size: 11 },
+                                boxWidth: 12,
+                                boxHeight: 12,
+                                borderRadius: 3,
+                                useBorderRadius: true,
+                                padding: 16,
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: isDark ? '#1e293b' : '#ffffff',
+                            titleColor: isDark ? '#f1f5f9' : '#0f172a',
+                            bodyColor: isDark ? '#cbd5e1' : '#475569',
+                            borderColor: isDark ? '#334155' : '#e2e8f0',
+                            borderWidth: 1,
+                            padding: 12,
+                            cornerRadius: 8,
+                            callbacks: {
+                                title: (items) => {
+                                    const mk = trendsChartInstance._monthKeys;
+                                    const idx = items[0].dataIndex;
+                                    const [y, m] = mk[idx].split('-');
+                                    const date = new Date(y, m - 1);
+                                    let label = date.toLocaleDateString(currentLang === 'es' ? 'es-ES' : 'en-US', { month: 'long', year: 'numeric' });
+                                    return label.charAt(0).toUpperCase() + label.slice(1);
+                                },
+                                label: (context) => {
+                                    return ` ${context.dataset.label}: ${formatCurrency(context.raw)}`;
+                                },
+                                afterBody: (items) => {
+                                    const td = trendsChartInstance._trendData;
+                                    const idx = items[0].dataIndex;
+                                    const total = td && td[idx] ? td[idx].total : 0;
+                                    return `\n  ${STRINGS[currentLang].trendsTooltipTotal}: ${formatCurrency(total)}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            trendsChartInstance._monthKeys = monthKeys;
+            trendsChartInstance._trendData = data;
+        };
+
+        const updateSummaries = (filteredArray, allExpensesScope) => {
+            const S = STRINGS[currentLang];
+            
+            let visibleTotal = 0, scopePaid = 0, scopePending = 0;
+            const categoryTotals = {};
+            Object.keys(CATEGORIES).forEach(c => categoryTotals[c] = 0);
+            filteredArray.forEach(exp => visibleTotal += exp.amount);
+            allExpensesScope.forEach(exp => {
+                if (exp.status === 'Pagado') scopePaid += exp.amount; else scopePending += exp.amount;
+                const c = exp.category || 'Otros';
+                if (categoryTotals[c] !== undefined) categoryTotals[c] += exp.amount;
+            });
+            document.getElementById('summary-total').textContent = formatCurrency(visibleTotal);
+            document.getElementById('summary-paid').textContent = formatCurrency(scopePaid);
+            document.getElementById('summary-pending').textContent = formatCurrency(scopePending);
+            updateChart(categoryTotals);
+
+            let currentMonthPending = 0;
+            let currentMonthPaid = 0;
+            const now = new Date();
+            const currentMonthYearStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+            expenses.forEach(exp => {
+                const d = new Date(exp.dueDate + 'T12:00:00');
+                const expMonthYearStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                if (expMonthYearStr === currentMonthYearStr) {
+                    if (exp.status === 'Pagado') currentMonthPaid += exp.amount;
+                    else currentMonthPending += exp.amount;
+                }
+            });
+
+            const currentMonthTotal = currentMonthPaid + currentMonthPending;
+            let currentMonthRemainingText = formatCurrency(0);
+            
+            const remEl = document.getElementById('summary-month-remaining');
+            if (monthlyBudget > 0) {
+                const remaining = monthlyBudget - currentMonthTotal;
+                currentMonthRemainingText = formatCurrency(remaining);
+                
+                if (currentMonthTotal >= (monthlyBudget * 0.9)) {
+                    remEl.className = 'text-2xl font-bold text-red-600 dark:text-red-400';
+                } else {
+                    remEl.className = 'text-2xl font-bold text-indigo-600 dark:text-indigo-400';
+                }
+            } else {
+                currentMonthRemainingText = S.summaryNoBudget;
+                remEl.className = 'text-lg font-bold text-slate-400 dark:text-slate-500 mt-1';
+            }
+
+            document.getElementById('summary-month-pending').textContent = formatCurrency(currentMonthPending);
+            document.getElementById('summary-month-paid').textContent = formatCurrency(currentMonthPaid);
+            remEl.textContent = currentMonthRemainingText;
+
+            let budgetTotal = 0;
+            const selectedMonth = document.getElementById('filter-month').value;
+            let budgetScopeName = "";
+            if (selectedMonth === 'All') {
+                budgetTotal = currentMonthTotal;
+                budgetScopeName = S.budgetCurrentMonth;
+            } else { 
+                budgetTotal = scopePaid + scopePending; 
+                budgetScopeName = S.budgetSelectedMonth; 
+            }
+            const scopeNote = selectedMonth === 'All' ? ` <span class="text-xs font-normal text-amber-500 dark:text-amber-400">(${S.filterScopeNote})</span>` : '';
+            document.getElementById('budget-title').innerHTML = `${S.budgetTitle} (${budgetScopeName})${scopeNote}`;
+            updateBudgetProgress(budgetTotal);
+
+            updateTrendsChart();
+        };
+
+        const setFilter = (filterType) => {
+            currentPage = 1;
+            currentFilter = filterType;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                const isActive = btn.id === `filter-${filterType}`;
+                btn.setAttribute('aria-pressed', isActive);
+                if (isActive) { btn.classList.add('bg-white', 'dark:bg-slate-700', 'shadow-sm', 'text-slate-800', 'dark:text-white'); btn.classList.remove('text-slate-500', 'dark:text-slate-400', 'hover:text-slate-800', 'dark:hover:text-white'); }
+                else { btn.classList.remove('bg-white', 'dark:bg-slate-700', 'shadow-sm', 'text-slate-800', 'dark:text-white'); btn.classList.add('text-slate-500', 'dark:text-slate-400', 'hover:text-slate-800', 'dark:hover:text-white'); }
+            });
+            renderTable();
+        };
+
+        const goToPage = (page) => {
+            currentPage = page;
+            renderTable();
+            document.getElementById('expense-tbody').closest('.bg-white, .dark\\:bg-slate-800')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
+        const buildPageNumbers = (current, total) => {
+            if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+            const pages = [1];
+            if (current > 3) pages.push('...');
+            for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) {
+                pages.push(i);
+            }
+            if (current < total - 2) pages.push('...');
+            pages.push(total);
+            return pages;
+        };
+
+        const renderTable = () => {
+            const S = STRINGS[currentLang];
+            const tbody = document.getElementById('expense-tbody');
+            const mobileCards = document.getElementById('expense-cards-mobile');
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            const selectedMonth = document.getElementById('filter-month').value;
+            const expensesInMonth = expenses.filter(exp => {
+                if (selectedMonth === 'All') return true;
+                const date = new Date(exp.dueDate + 'T12:00:00');
+                return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` === selectedMonth;
+            });
+            const selectedCategory = document.getElementById('filter-category').value;
+            const visibleExpenses = expensesInMonth.filter(exp => {
+                const matchesSearch = exp.product.toLowerCase().includes(searchTerm) || (exp.description && exp.description.toLowerCase().includes(searchTerm));
+                let matchesStatus = true;
+                if (currentFilter === 'Pendientes') matchesStatus = exp.status === 'Pendiente';
+                if (currentFilter === 'Pagados') matchesStatus = exp.status === 'Pagado';
+                const matchesCategory = selectedCategory === 'All' || exp.category === selectedCategory;
+                return matchesSearch && matchesStatus && matchesCategory;
+            });
+            const sortedExpenses = [...visibleExpenses].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+            const totalPages = Math.max(1, Math.ceil(sortedExpenses.length / ITEMS_PER_PAGE));
+            if (currentPage > totalPages) currentPage = totalPages;
+            const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+            const pageExpenses = sortedExpenses.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+
+            if (sortedExpenses.length === 0) {
+                document.getElementById('results-count').textContent = `${S.showingCount} 0 ${S.showingCountSuffix}`;
+            } else {
+                const rangeEnd = Math.min(startIndex + ITEMS_PER_PAGE, sortedExpenses.length);
+                const separator = currentLang === 'es' ? 'de' : 'of';
+                document.getElementById('results-count').textContent = `${S.showingCount} ${startIndex + 1}–${rangeEnd} ${separator} ${sortedExpenses.length} ${S.showingCountSuffix}`;
+            }
+
+            if (sortedExpenses.length === 0) {
+                let emptyMessage = S.noResults;
+                if (expenses.length === 0) emptyMessage = S.noExpenses;
+                const emptyHTML = `<i data-lucide="search-x" class="mx-auto mb-3 opacity-30 w-12 h-12"></i>${emptyMessage}`;
+                tbody.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-slate-400 dark:text-slate-500 bg-transparent">${emptyHTML}</td></tr>`;
+                mobileCards.innerHTML = `<div class="p-8 text-center text-slate-400 dark:text-slate-500">${emptyHTML}</div>`;
+            } else {
+                const renderedExpenses = pageExpenses.map(expense => {
+                    const isPaid = expense.status === 'Pagado';
+                    const displayStatus = isPaid ? S.statusPaid : S.statusPending;
+                    const today = new Date(); today.setHours(0, 0, 0, 0);
+                    const isOverdue = !isPaid && new Date(expense.dueDate + 'T12:00:00') < today;
+                    const dateObj = new Date(expense.dueDate + 'T12:00:00');
+                    const formattedDate = escapeHTML(dateObj.toLocaleDateString(currentLang === 'es' ? 'es-ES' : 'en-US', { day: '2-digit', month: 'short', year: 'numeric' }));
+                    const safeProduct = escapeHTML(expense.product);
+                    const safeDescription = escapeHTML(expense.description || '...');
+                    const safeRecipient = escapeHTML(expense.recipient || '');
+                    const safeNotes = escapeHTML(expense.notes || '');
+                    const safeId = escapeHTML(expense.id);
+                    let safeInstallments = '-';
+                    let displayName = safeProduct;
+                    if (expense.groupId && expense.installmentTotal > 1) {
+                        const separator = currentLang === 'es' ? 'de' : 'of';
+                        safeInstallments = `${expense.installmentIndex} ${separator} ${expense.installmentTotal}`;
+                        displayName = `${safeProduct} <span class="text-xs text-blue-500 font-medium ml-1">(${S.installmentLabel} ${expense.installmentIndex}/${expense.installmentTotal})</span>`;
+                    }
+                    if (expense.recurring) {
+                        displayName += ` <span class="inline-flex items-center gap-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded-full ml-1 font-medium">${S.badgeRecurring} <button data-action="stop-recurring" data-id="${safeId}" class="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5 transition-colors" title="${escapeHTML(S.stopRecurringTitle)}"><i data-lucide="x" class="w-3 h-3 pointer-events-none"></i></button></span>`;
+                    }
+                    const catMap = { 'Vivienda': S.catVivienda, 'Alimentación': S.catAlimentacion, 'Suscripciones': S.catSuscripciones, 'Transporte': S.catTransporte, 'Salud': S.catSalud, 'Deudas': S.catDeudas, 'Otros': S.catOtros };
+                    const catData = CATEGORIES[expense.category] || CATEGORIES['Otros'];
+                    const localizedCategory = catMap[expense.category] || expense.category || S.catOtros;
+                    const categoryBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide ${catData.color} uppercase">${escapeHTML(localizedCategory)}</span>`;
+                    const ariaToggle = escapeHTML(`${S.toastMarkedAs} ${isPaid ? S.statusPending : S.statusPaid}: ${expense.product}`);
+                    const ariaEdit = escapeHTML(`${S.ariaEdit}: ${expense.product}`);
+                    const ariaDeleteLabel = escapeHTML(`${S.ariaDelete}: ${expense.product}`);
+                    return { expense, isPaid, displayStatus, isOverdue, formattedDate, safeProduct, safeDescription, safeRecipient, safeNotes, safeId, safeInstallments, displayName, categoryBadge, catData, ariaToggle, ariaEdit, ariaDeleteLabel };
+                });
+
+                tbody.innerHTML = renderedExpenses.map(r => {
+                    const { expense, isPaid, displayStatus, isOverdue, formattedDate, safeRecipient, safeNotes, safeDescription, safeId, safeInstallments, displayName, categoryBadge, ariaToggle, ariaEdit, ariaDeleteLabel } = r;
+                    return `
+                    <tr class="border-b border-slate-50 dark:border-slate-700/50 transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-700/30 ${isPaid ? 'opacity-70 bg-slate-50/30 dark:bg-slate-800/20' : ''} ${isOverdue ? 'border-l-2 border-l-red-400 dark:border-l-red-500' : ''}">
+                        <td class="p-4"><div class="font-medium ${isPaid ? 'text-slate-500 dark:text-slate-400 line-through decoration-slate-300 dark:decoration-slate-500' : 'text-slate-900 dark:text-white'}">${displayName}</div><div class="text-xs text-slate-500 dark:text-slate-400">${expense.description ? safeDescription : ''}</div>${categoryBadge}</td>
+                        <td class="p-4">
+                            <div class="flex flex-col gap-1.5">
+                                ${expense.recipient ? `<div class="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300"><i data-lucide="user" class="text-slate-400 dark:text-slate-500 w-3.5 h-3.5 shrink-0"></i><span class="truncate max-w-[150px]">${safeRecipient}</span></div>` : ''}
+                                ${expense.notes ? `<div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><i data-lucide="wallet" class="text-slate-400 dark:text-slate-500 w-3.5 h-3.5 shrink-0"></i><span class="truncate max-w-[150px]">${safeNotes}</span></div>` : ''}
+                                ${!expense.recipient && !expense.notes ? `<span class="text-slate-400 dark:text-slate-600">-</span>` : ''}
+                            </div>
+                        </td>
+                        <td class="p-4 font-semibold text-slate-900 dark:text-white">${formatCurrency(expense.amount)}</td>
+                        <td class="p-4"><div class="flex items-center gap-2 text-sm ${isPaid ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-300'}"><i data-lucide="calendar" class="text-slate-400 dark:text-slate-500 w-3.5 h-3.5"></i>${formattedDate}</div></td>
+                        <td class="p-4 text-center text-sm text-slate-600 dark:text-slate-300">${safeInstallments !== '-' ? `<span class="bg-white dark:bg-slate-700 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600 shadow-sm whitespace-nowrap">${safeInstallments}</span>` : '-'}</td>
+                        <td class="p-4 text-center"><div class="flex flex-col items-center gap-1">${isOverdue ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400"><i data-lucide="alert-circle" class="w-3 h-3 pointer-events-none"></i>${S.badgeOverdue}</span>` : ''}<button aria-label="${ariaToggle}" data-action="toggle-status" data-id="${safeId}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-transform hover:scale-105 ${isPaid ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'}"><i data-lucide="${isPaid ? 'check-circle' : 'circle'}" class="w-3.5 h-3.5 pointer-events-none"></i>${displayStatus}</button></div></td>
+                        <td class="p-4 text-center"><div class="flex items-center justify-center gap-1"><button aria-label="${ariaEdit}" data-action="edit-expense" data-id="${safeId}" class="p-2 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title="${S.ariaEdit}"><i data-lucide="pencil" class="w-5 h-5 pointer-events-none"></i></button><button aria-label="${ariaDeleteLabel}" data-action="delete-expense" data-id="${safeId}" class="p-2 text-slate-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors" title="${S.ariaDelete}"><i data-lucide="trash-2" class="w-5 h-5 pointer-events-none"></i></button></div></td>
+                    </tr>`;
+                }).join('');
+
+                mobileCards.innerHTML = renderedExpenses.map(r => {
+                    const { expense, isPaid, displayStatus, isOverdue, formattedDate, safeRecipient, safeNotes, safeDescription, safeId, safeInstallments, displayName, categoryBadge, ariaToggle, ariaEdit, ariaDeleteLabel } = r;
+                    return `
+                    <div class="expense-card ${isPaid ? 'paid' : ''} ${isOverdue ? 'overdue' : ''} p-4 space-y-3">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="flex-1 min-w-0">
+                                <div class="font-medium text-sm ${isPaid ? 'text-slate-500 dark:text-slate-400 line-through decoration-slate-300 dark:decoration-slate-500' : 'text-slate-900 dark:text-white'} truncate">${displayName}</div>
+                                ${expense.description ? `<div class="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">${safeDescription}</div>` : ''}
+                                <div class="flex items-center gap-2 mt-1.5 flex-wrap">${categoryBadge}${safeInstallments !== '-' ? `<span class="text-[10px] font-semibold text-blue-500 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded uppercase">${safeInstallments}</span>` : ''}</div>
+                            </div>
+                            <div class="text-right shrink-0">
+                                <div class="font-bold text-base ${isPaid ? 'text-slate-500 dark:text-slate-400' : 'text-slate-900 dark:text-white'}">${formatCurrency(expense.amount)}</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="flex flex-col gap-1 text-xs text-slate-500 dark:text-slate-400 min-w-0">
+                                <span class="inline-flex items-center gap-1 shrink-0"><i data-lucide="calendar" class="w-3 h-3"></i>${formattedDate}</span>
+                                ${expense.recipient ? `<span class="inline-flex items-center gap-1 truncate"><i data-lucide="user" class="w-3 h-3 shrink-0"></i><span class="truncate">${safeRecipient}</span></span>` : ''}
+                                ${expense.notes ? `<span class="inline-flex items-center gap-1 truncate"><i data-lucide="wallet" class="w-3 h-3 shrink-0"></i><span class="truncate">${safeNotes}</span></span>` : ''}
+                            </div>
+                            <div class="flex items-center gap-1 shrink-0">
+                                ${isOverdue ? `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400"><i data-lucide="alert-circle" class="w-2.5 h-2.5 pointer-events-none"></i>${S.badgeOverdue}</span>` : ''}
+                                <button aria-label="${ariaToggle}" data-action="toggle-status" data-id="${safeId}" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium ${isPaid ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'}"><i data-lucide="${isPaid ? 'check-circle' : 'circle'}" class="w-3.5 h-3.5 pointer-events-none"></i>${displayStatus}</button>
+                                <button aria-label="${ariaEdit}" data-action="edit-expense" data-id="${safeId}" class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg transition-colors"><i data-lucide="pencil" class="w-4 h-4 pointer-events-none"></i></button>
+                                <button aria-label="${ariaDeleteLabel}" data-action="delete-expense" data-id="${safeId}" class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg transition-colors"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+            
+            lucide.createIcons({ attrs: { 'data-lucide': '' }, nameAttr: 'data-lucide' });
+
+            const pagContainer = document.getElementById('pagination-controls');
+            if (totalPages <= 1) {
+                pagContainer.innerHTML = '';
+            } else {
+                let pagHTML = '';
+                const btnBase = 'px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors';
+                const btnDisabled = 'text-slate-300 dark:text-slate-600 cursor-not-allowed';
+                const btnEnabled = 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700';
+                const btnActive = 'bg-indigo-600 text-white shadow-sm';
+
+                pagHTML += `<button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} aria-label="${currentLang === 'es' ? 'Página anterior' : 'Previous page'}" class="${btnBase} ${currentPage === 1 ? btnDisabled : btnEnabled}">‹</button>`;
+
+                const pages = buildPageNumbers(currentPage, totalPages);
+                pages.forEach(p => {
+                    if (p === '...') {
+                        pagHTML += `<span class="px-1.5 text-slate-400 text-sm select-none">…</span>`;
+                    } else {
+                        const isActive = p === currentPage;
+                        pagHTML += `<button onclick="goToPage(${p})" aria-label="${currentLang === 'es' ? 'Página' : 'Page'} ${p}" aria-current="${isActive ? 'page' : 'false'}" class="${btnBase} ${isActive ? btnActive : btnEnabled}">${p}</button>`;
+                    }
+                });
+
+                pagHTML += `<button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} aria-label="${currentLang === 'es' ? 'Página siguiente' : 'Next page'}" class="${btnBase} ${currentPage === totalPages ? btnDisabled : btnEnabled}">›</button>`;
+
+                pagContainer.innerHTML = pagHTML;
+            }
+
+            updateSummaries(sortedExpenses, expensesInMonth);
+        };
+
+        document.getElementById('expense-tbody').addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+            const action = btn.getAttribute('data-action');
+            const id = btn.getAttribute('data-id');
+            if (action === 'toggle-status') toggleStatus(id);
+            else if (action === 'edit-expense') editExpense(id);
+            else if (action === 'delete-expense') openDeleteConfirm(id);
+            else if (action === 'stop-recurring') stopRecurring(id);
+        });
+
+        document.getElementById('expense-cards-mobile').addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+            const action = btn.getAttribute('data-action');
+            const id = btn.getAttribute('data-id');
+            if (action === 'toggle-status') toggleStatus(id);
+            else if (action === 'edit-expense') editExpense(id);
+            else if (action === 'delete-expense') openDeleteConfirm(id);
+            else if (action === 'stop-recurring') stopRecurring(id);
+        });
+
+        document.getElementById('search-input').addEventListener('input', debounce(() => { currentPage = 1; renderTable(); }, 200));
+        document.getElementById('filter-month').addEventListener('change', () => { currentPage = 1; renderTable(); });
+        document.getElementById('filter-category').addEventListener('change', () => { currentPage = 1; renderTable(); });
+
+        const stopRecurring = (id) => {
+            const exp = expenses.find(e => String(e.id) === String(id));
+            if (exp) { exp.recurring = false; saveToLocalStorage(); renderUI(); showToast(STRINGS[currentLang].toastStopRecurring, 'info'); }
+        };
+
+        const toggleStatus = (id) => {
+            if (toggleLock) return;
+            toggleLock = true;
+            const S = STRINGS[currentLang];
+            const expIndex = expenses.findIndex(exp => String(exp.id) === String(id));
+            if (expIndex === -1) { toggleLock = false; return; }
+            const exp = expenses[expIndex];
+            const newStatus = exp.status === 'Pagado' ? 'Pendiente' : 'Pagado';
+            expenses[expIndex].status = newStatus;
+            if (newStatus === 'Pagado' && exp.recurring) {
+                const currentDate = new Date(exp.dueDate + 'T12:00:00');
+                const nextDate = new Date(currentDate);
+                const preferredDay = exp.preferredDay || currentDate.getDate();
+                nextDate.setDate(1); nextDate.setMonth(currentDate.getMonth() + 1);
+                const maxDays = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+                nextDate.setDate(Math.min(preferredDay, maxDays));
+                const y = nextDate.getFullYear(), m = String(nextDate.getMonth() + 1).padStart(2, '0'), d = String(nextDate.getDate()).padStart(2, '0');
+                const nextMonthPrefix = `${y}-${m}`;
+                const stableRootId = exp.recurringRootId || exp.id;
+                const alreadyExists = expenses.some(e => (e.recurringRootId === stableRootId || e.id === stableRootId) && e.dueDate.startsWith(nextMonthPrefix));
+                if (!alreadyExists) {
+                    expenses.push({ id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9), recurringRootId: stableRootId, preferredDay, groupId: null, product: exp.product, category: exp.category, description: exp.description, recipient: exp.recipient, notes: exp.notes, amount: exp.amount, dueDate: `${y}-${m}-${d}`, installmentIndex: 1, installmentTotal: 1, status: 'Pendiente', recurring: true });
+                    showToast(`${S.toastPaidNext} ${m}/${y}`, 'success');
+                } else { showToast(`${S.toastPaidExists} ${m}/${y} ${S.toastPaidExistsSuffix}`, 'info'); }
+            } else { showToast(`${S.toastMarkedAs} ${newStatus === 'Pagado' ? S.statusPaid : S.statusPending}`, newStatus === 'Pagado' ? 'success' : 'warning'); }
+            saveToLocalStorage(); renderUI();
+            requestAnimationFrame(() => { toggleLock = false; });
+        };
+
+        const openDeleteConfirm = (id) => {
+            const S = STRINGS[currentLang];
+            const exp = expenses.find(e => String(e.id) === String(id));
+            if (!exp) return;
+            _modalTriggerElement = document.activeElement;
+            expenseToDelete = exp;
+            const modal = document.getElementById('confirm-modal');
+            const normalActions = document.getElementById('delete-actions-normal');
+            const groupActions = document.getElementById('delete-actions-group');
+            const modalText = document.getElementById('delete-modal-text');
+            document.querySelector('#confirm-modal h3').textContent = S.modalDeleteTitle;
+            if (exp.groupId && exp.installmentTotal > 1) {
+                normalActions.classList.add('hidden'); normalActions.classList.remove('flex');
+                groupActions.classList.remove('hidden'); groupActions.classList.add('flex');
+                modalText.innerHTML = `${currentLang === 'es' ? 'Este gasto pertenece a la serie' : 'This expense belongs to series'} <strong>${escapeHTML(exp.product)}</strong>. <br>${currentLang === 'es' ? '¿Qué deseas hacer?' : 'What do you want to do?'}`;
+                document.querySelector('#delete-actions-group button:first-child span').textContent = S.modalDeleteSingle;
+                document.querySelector('#delete-actions-group button:nth-child(2) span').textContent = S.modalDeleteGroup;
+            } else {
+                normalActions.classList.remove('hidden'); normalActions.classList.add('flex');
+                groupActions.classList.add('hidden'); groupActions.classList.remove('flex');
+                modalText.textContent = S.modalDeleteText;
+            }
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+            void modal.offsetWidth;
+            const modalInner = modal.querySelector('div');
+            modal.classList.remove('opacity-0'); modalInner.classList.remove('scale-95');
+            const firstButton = modalInner.querySelector('button');
+            if (firstButton) firstButton.focus();
+            if (_modalEscapeHandler) document.removeEventListener('keydown', _modalEscapeHandler);
+            _modalEscapeHandler = (e) => { if (e.key === 'Escape') closeDeleteConfirm(); };
+            document.addEventListener('keydown', _modalEscapeHandler);
+            modal.onclick = (e) => { if (e.target === modal) closeDeleteConfirm(); };
+            if (_modalTabHandler) modalInner.removeEventListener('keydown', _modalTabHandler);
+            _modalTabHandler = (e) => {
+                if (e.key !== 'Tab') return;
+                const focusable = modalInner.querySelectorAll('button:not([disabled])');
+                if (focusable.length === 0) return;
+                const first = focusable[0], last = focusable[focusable.length - 1];
+                if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+            };
+            modalInner.addEventListener('keydown', _modalTabHandler);
+            lucide.createIcons();
+        };
+
+        const closeDeleteConfirm = () => {
+            const modal = document.getElementById('confirm-modal');
+            const modalInner = modal.querySelector('div');
+            modal.classList.add('opacity-0'); modalInner.classList.add('scale-95');
+            if (_modalEscapeHandler) { document.removeEventListener('keydown', _modalEscapeHandler); _modalEscapeHandler = null; }
+            if (_modalTabHandler) { modalInner.removeEventListener('keydown', _modalTabHandler); _modalTabHandler = null; }
+            modal.onclick = null;
+            setTimeout(() => {
+                modal.classList.add('hidden'); modal.classList.remove('flex');
+                expenseToDelete = null;
+                if (_modalTriggerElement && document.body.contains(_modalTriggerElement)) _modalTriggerElement.focus();
+                _modalTriggerElement = null;
+            }, 200);
+        };
+
+        const confirmDelete = (mode) => {
+            if (expenseToDelete !== null) {
+                if (mode === 'group' && expenseToDelete.groupId) { expenses = expenses.filter(exp => exp.groupId !== expenseToDelete.groupId); showToast(STRINGS[currentLang].toastSeriesDeleted, 'info'); }
+                else { expenses = expenses.filter(exp => String(exp.id) !== String(expenseToDelete.id)); showToast(STRINGS[currentLang].toastDeleted, 'info'); }
+                saveToLocalStorage(); renderUI(); closeDeleteConfirm();
+            }
+        };
+
+        const editExpense = (id) => {
+            const S = STRINGS[currentLang];
+            const exp = expenses.find(e => String(e.id) === String(id));
+            if (!exp) return;
+            document.getElementById('input-product').value = exp.product;
+            document.getElementById('input-category').value = exp.category || 'Otros';
+            document.getElementById('input-amount').value = exp.amount;
+            document.getElementById('input-date').value = exp.dueDate;
+            document.getElementById('input-recipient').value = exp.recipient || '';
+            document.getElementById('input-notes').value = exp.notes || '';
+            document.getElementById('input-description').value = exp.description || '';
+            document.getElementById('input-installments').value = 1;
+            document.getElementById('input-installments').disabled = true;
+            document.getElementById('input-installments').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('input-recurring').checked = exp.recurring || false;
+            if (exp.groupId && exp.installmentTotal > 1) document.getElementById('label-amount').innerHTML = S.lblAmountInstallment;
+            else document.getElementById('label-amount').textContent = S.lblAmountEdit;
+            editingId = id;
+            document.getElementById('form-container').classList.add('ring-2', 'ring-amber-500', 'bg-amber-50/30', 'dark:bg-amber-900/10');
+            document.getElementById('form-title').innerHTML = `<i data-lucide="pencil" class="text-amber-600 dark:text-amber-500 w-5 h-5"></i> ${S.formTitleEdit}`;
+            const btn = document.getElementById('submit-btn');
+            btn.textContent = S.btnUpdate; btn.classList.replace('bg-blue-600', 'bg-amber-600'); btn.classList.replace('hover:bg-blue-700', 'hover:bg-amber-700');
+            document.getElementById('cancel-btn').classList.remove('hidden');
+            document.getElementById('cancel-btn').textContent = S.btnCancel;
+            document.getElementById('submit-btn').classList.remove('w-full');
+            document.getElementById('form-container').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            lucide.createIcons();
+        };
+
+        const cancelEdit = () => {
+            const S = STRINGS[currentLang];
+            editingId = null;
+            document.getElementById('expense-form').reset();
+            document.getElementById('input-recurring').checked = false;
+            document.getElementById('input-category').value = 'Otros';
+            document.getElementById('input-installments').disabled = false;
+            document.getElementById('input-installments').classList.remove('opacity-50', 'cursor-not-allowed');
+            document.getElementById('label-amount').textContent = S.lblAmount;
+            document.getElementById('form-container').classList.remove('ring-2', 'ring-amber-500', 'bg-amber-50/30', 'dark:bg-amber-900/10');
+            document.getElementById('form-title').innerHTML = `<i data-lucide="plus" class="text-blue-600 dark:text-blue-400 w-5 h-5"></i> ${S.formTitleAdd}`;
+            const btn = document.getElementById('submit-btn');
+            btn.textContent = S.btnAdd; btn.classList.replace('bg-amber-600', 'bg-blue-600'); btn.classList.replace('hover:bg-amber-700', 'hover:bg-blue-700');
+            document.getElementById('cancel-btn').classList.add('hidden');
+            document.getElementById('submit-btn').classList.replace('w-2/3', 'w-full');
+            lucide.createIcons();
+        };
+
+        document.getElementById('expense-form').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const S = STRINGS[currentLang];
+            const product = sanitizeField(document.getElementById('input-product').value);
+            const category = document.getElementById('input-category').value;
+            const description = sanitizeField(document.getElementById('input-description').value);
+            const recipient = sanitizeField(document.getElementById('input-recipient').value);
+            const notes = sanitizeField(document.getElementById('input-notes').value);
+            const rawAmount = parseFloat(document.getElementById('input-amount').value);
+            const dueDate = document.getElementById('input-date').value;
+            const installments = parseInt(document.getElementById('input-installments').value) || 1;
+            const isRecurringChecked = document.getElementById('input-recurring').checked;
+            if (isNaN(rawAmount) || rawAmount <= 0) { showToast(S.toastInvalidAmount, 'error'); return; }
+
+            if (editingId) {
+                const current = expenses.find(e => String(e.id) === String(editingId));
+                if (current.groupId && current.installmentTotal > 1) {
+                    expenses = expenses.map(exp => {
+                        if (exp.groupId === current.groupId) {
+                            let updatedExp = { ...exp, product, category, description, recipient, notes };
+                            if (String(exp.id) === String(editingId)) { updatedExp.amount = rawAmount; updatedExp.dueDate = dueDate; }
+                            return updatedExp;
+                        }
+                        return exp;
+                    });
+                    showToast(S.toastSeriesUpdated, 'success');
+                } else {
+                    expenses = expenses.map(exp => {
+                        if (String(exp.id) === String(editingId)) {
+                            return { ...exp, product, category, description, recipient, notes, amount: rawAmount, dueDate, recurring: isRecurringChecked, preferredDay: isRecurringChecked ? (exp.preferredDay || new Date(dueDate + 'T12:00:00').getDate()) : undefined };
+                        }
+                        return exp;
+                    });
+                    showToast(S.toastUpdated, 'success');
+                }
+                saveToLocalStorage(); renderUI(); cancelEdit(); return;
+            } else {
+                const amountPerInstallment = parseFloat((rawAmount / installments).toFixed(2));
+                const baseDateObj = new Date(dueDate + 'T12:00:00');
+                const originalDay = baseDateObj.getDate();
+                const groupId = installments > 1 ? (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + '-group') : null;
+                for (let i = 0; i < installments; i++) {
+                    const nextDate = new Date(baseDateObj.getTime());
+                    nextDate.setDate(1); nextDate.setMonth(baseDateObj.getMonth() + i);
+                    const maxDaysInMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+                    nextDate.setDate(Math.min(originalDay, maxDaysInMonth));
+                    let currentAmount = amountPerInstallment;
+                    if (i === installments - 1 && installments > 1) { currentAmount = parseFloat((rawAmount - parseFloat((amountPerInstallment * (installments - 1)).toFixed(2))).toFixed(2)); }
+                    const year = nextDate.getFullYear(), month = String(nextDate.getMonth() + 1).padStart(2, '0'), day = String(nextDate.getDate()).padStart(2, '0');
+                    const isRecurring = installments === 1 && isRecurringChecked;
+                    expenses.push({ id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + '-' + i, groupId, product, category, description, recipient, notes, amount: currentAmount, dueDate: `${year}-${month}-${day}`, installmentIndex: i + 1, installmentTotal: installments, status: 'Pendiente', recurring: isRecurring, preferredDay: isRecurring ? originalDay : undefined });
+                }
+                showToast(installments > 1 ? `${installments} ${S.toastInstallments}` : S.toastAdded, 'success');
+                this.reset(); document.getElementById('input-installments').value = 1; document.getElementById('input-recurring').checked = false; document.getElementById('input-category').value = 'Otros';
+            }
+            saveToLocalStorage(); renderUI();
+        });
+
+        const exportToCSV = () => {
+            const S = STRINGS[currentLang];
+            const escapeCSV = (str) => { let val = String(str).replace(/"/g, '""'); if (/^[=+\-@\t\r]/.test(val)) val = "'" + val; return `"${val}"`; };
+            const headers = [S.colProduct, S.lblCategory.replace(' *', ''), S.lblDescription, S.colRecipient, S.colNotes, S.colAmount, S.colDueDate, S.colInstallments, S.colStatus];
+            const csvRows = [headers.map(escapeCSV).join(',')];
+
+            const selectedMonth = document.getElementById('filter-month').value;
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            const selectedCategory = document.getElementById('filter-category').value;
+
+            const exportData = expenses.filter(exp => {
+                if (selectedMonth !== 'All') {
+                    const date = new Date(exp.dueDate + 'T12:00:00');
+                    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                    if (monthKey !== selectedMonth) return false;
+                }
+                if (searchTerm) {
+                    const matchesSearch = exp.product.toLowerCase().includes(searchTerm)
+                        || (exp.description && exp.description.toLowerCase().includes(searchTerm));
+                    if (!matchesSearch) return false;
+                }
+                if (currentFilter === 'Pendientes' && exp.status !== 'Pendiente') return false;
+                if (currentFilter === 'Pagados' && exp.status !== 'Pagado') return false;
+                if (selectedCategory !== 'All' && exp.category !== selectedCategory) return false;
+                return true;
+            }).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+            const catMap = { 'Vivienda': S.catVivienda, 'Alimentación': S.catAlimentacion, 'Suscripciones': S.catSuscripciones, 'Transporte': S.catTransporte, 'Salud': S.catSalud, 'Deudas': S.catDeudas, 'Otros': S.catOtros };
+            exportData.forEach(exp => {
+                let instText = 'N/A';
+                if (exp.groupId && exp.installmentTotal > 1) { const sep = currentLang === 'es' ? 'de' : 'of'; instText = `${exp.installmentIndex} ${sep} ${exp.installmentTotal}`; }
+                const row = [exp.product, catMap[exp.category] || exp.category || S.catOtros, exp.description, exp.recipient, exp.notes, exp.amount, exp.dueDate, instText, exp.status === 'Pagado' ? S.statusPaid : S.statusPending];
+                csvRows.push(row.map(escapeCSV).join(','));
+            });
+            const blob = new Blob([`\ufeff${csvRows.join('\n')}`], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a'); link.href = url; link.download = `Gastos_${selectedMonth === 'All' ? 'Completos' : selectedMonth}_${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            showToast(S.toastCSV, 'info');
+        };
+
+        const exportToPDF = () => {
+            const S = STRINGS[currentLang];
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+
+            const selectedMonth = document.getElementById('filter-month').value;
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            const selectedCategory = document.getElementById('filter-category').value;
+
+            const exportData = expenses.filter(exp => {
+                if (selectedMonth !== 'All') {
+                    const date = new Date(exp.dueDate + 'T12:00:00');
+                    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                    if (monthKey !== selectedMonth) return false;
+                }
+                if (searchTerm) {
+                    const matchesSearch = exp.product.toLowerCase().includes(searchTerm) || (exp.description && exp.description.toLowerCase().includes(searchTerm));
+                    if (!matchesSearch) return false;
+                }
+                if (currentFilter === 'Pendientes' && exp.status !== 'Pendiente') return false;
+                if (currentFilter === 'Pagados' && exp.status !== 'Pagado') return false;
+                if (selectedCategory !== 'All' && exp.category !== selectedCategory) return false;
+                return true;
+            }).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+            doc.setFontSize(18);
+            doc.text(S.appTitle, 14, 22);
+            
+            doc.setFontSize(11);
+            doc.setTextColor(100);
+            const reportDate = new Date().toLocaleDateString(currentLang === 'es' ? 'es-ES' : 'en-US');
+            const monthLabel = selectedMonth === 'All' ? S.allMonths : document.querySelector('#filter-month option:checked').text;
+            doc.text(`${currentLang === 'es' ? 'Reporte generado el' : 'Report generated on'}: ${reportDate} | ${currentLang === 'es' ? 'Mes' : 'Month'}: ${monthLabel}`, 14, 30);
+
+            let total = 0, pending = 0, paid = 0;
+            exportData.forEach(exp => {
+                total += exp.amount;
+                if (exp.status === 'Pagado') paid += exp.amount; else pending += exp.amount;
+            });
+
+            doc.setFontSize(10);
+            doc.setTextColor(50);
+            doc.text(`${S.summaryTotal}: ${formatCurrency(total)}`, 14, 40);
+            doc.text(`${S.summaryPaid}: ${formatCurrency(paid)}`, 14, 46);
+            doc.text(`${S.summaryPending}: ${formatCurrency(pending)}`, 14, 52);
+
+            const catMap = { 'Vivienda': S.catVivienda, 'Alimentación': S.catAlimentacion, 'Suscripciones': S.catSuscripciones, 'Transporte': S.catTransporte, 'Salud': S.catSalud, 'Deudas': S.catDeudas, 'Otros': S.catOtros };
+            
+            const tableColumn = [S.colProduct, S.lblCategory.replace(' *', ''), S.colRecipient, S.colAmount, S.colDueDate, S.colStatus];
+            const tableRows = [];
+
+            exportData.forEach(exp => {
+                let destNotesCombined = exp.recipient || '';
+                if (exp.notes) destNotesCombined += destNotesCombined ? `\n(${exp.notes})` : exp.notes;
+
+                tableRows.push([
+                    exp.product,
+                    catMap[exp.category] || exp.category || S.catOtros,
+                    destNotesCombined || '-',
+                    formatCurrencyShort(exp.amount),
+                    exp.dueDate,
+                    exp.status === 'Pagado' ? S.statusPaid : S.statusPending
+                ]);
+            });
+
+            doc.autoTable({
+                startY: 60,
+                head: [tableColumn],
+                body: tableRows,
+                theme: 'striped',
+                headStyles: { fillColor: [79, 70, 229] }, 
+                styles: { fontSize: 9, cellPadding: 3 },
+                alternateRowStyles: { fillColor: [248, 250, 252] }
+            });
+
+            doc.save(`Gastos_${selectedMonth === 'All' ? 'Completos' : selectedMonth}_${new Date().toISOString().split('T')[0]}.pdf`);
+            showToast(S.toastPDF, 'info');
+        };
+
+        const exportToJSON = () => {
+            const backup = { exported_at: new Date().toISOString(), monthly_budget: monthlyBudget, expenses };
+            const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a'); link.href = url; link.download = `Respaldo_Gastos_${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            showToast(STRINGS[currentLang].toastJSON, 'success');
+
+            changesSinceBackup = 0;
+            lastManualBackupTime = Date.now();
+            localStorage.setItem('changes_since_backup', '0');
+            localStorage.setItem('last_manual_backup', lastManualBackupTime);
+            document.getElementById('backup-reminder-banner').className = 'hidden items-center gap-3 p-4 rounded-xl border font-medium text-sm bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400';
+        };
+
+        const openImportConfirm = () => {
+            const S = STRINGS[currentLang];
+            const modal = document.getElementById('import-confirm-modal');
+            const modalInner = modal.querySelector('div');
+
+            document.getElementById('import-modal-title').textContent = S.importModalTitle;
+            document.getElementById('import-modal-text').textContent = S.importModalText.replace('{count}', expenses.length);
+            document.getElementById('import-modal-backup-note').textContent = expenses.length > 0 ? S.importModalBackupNote : '';
+            document.getElementById('import-confirm-btn').textContent = S.importModalBtn;
+            modal.querySelector('button[onclick="closeImportConfirm()"]').textContent = S.importModalCancel;
+
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+            void modal.offsetWidth;
+            modal.classList.remove('opacity-0'); modalInner.classList.remove('scale-95');
+
+            const firstButton = modalInner.querySelector('button');
+            if (firstButton) firstButton.focus();
+
+            if (_importModalEscapeHandler) document.removeEventListener('keydown', _importModalEscapeHandler);
+            _importModalEscapeHandler = (e) => { if (e.key === 'Escape') closeImportConfirm(); };
+            document.addEventListener('keydown', _importModalEscapeHandler);
+
+            if (_importModalTabHandler) modalInner.removeEventListener('keydown', _importModalTabHandler);
+            _importModalTabHandler = (e) => {
+                if (e.key !== 'Tab') return;
+                const focusable = modalInner.querySelectorAll('button:not([disabled])');
+                if (focusable.length === 0) return;
+                const first = focusable[0], last = focusable[focusable.length - 1];
+                if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+            };
+            modalInner.addEventListener('keydown', _importModalTabHandler);
+
+            modal.onclick = (e) => { if (e.target === modal) closeImportConfirm(); };
+
+            lucide.createIcons();
+        };
+
+        const closeImportConfirm = () => {
+            const modal = document.getElementById('import-confirm-modal');
+            const modalInner = modal.querySelector('div');
+            modal.classList.add('opacity-0'); modalInner.classList.add('scale-95');
+            if (_importModalEscapeHandler) { document.removeEventListener('keydown', _importModalEscapeHandler); _importModalEscapeHandler = null; }
+            if (_importModalTabHandler) { modalInner.removeEventListener('keydown', _importModalTabHandler); _importModalTabHandler = null; }
+            modal.onclick = null;
+            setTimeout(() => {
+                modal.classList.add('hidden'); modal.classList.remove('flex');
+            }, 200);
+        };
+
+        const proceedWithImport = () => {
+            closeImportConfirm();
+            setTimeout(() => {
+                const input = document.getElementById('import-json-input');
+                input.value = '';
+                input.onchange = (e) => {
+                    const file = e.target.files[0]; if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            const backup = JSON.parse(event.target.result);
+                            if (!backup.expenses || !Array.isArray(backup.expenses)) { showToast(STRINGS[currentLang].toastInvalidFile, 'error'); return; }
+                            const isValid = backup.expenses.every(exp => exp && typeof exp === 'object' && typeof exp.product === 'string' && typeof exp.dueDate === 'string');
+                            if (!isValid) { showToast(STRINGS[currentLang].toastInvalidFile, 'error'); return; }
+                            const idMap = new Map(), groupMap = new Map();
+                            const sanitizedExpenses = backup.expenses.map(rawExp => {
+                                const normalized = normalizeExpense(rawExp); if (!normalized) return null;
+                                const newId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
+                                idMap.set(String(rawExp.id || ''), newId); normalized.id = newId;
+                                if (rawExp.groupId) { const oldGroup = String(rawExp.groupId); if (!groupMap.has(oldGroup)) groupMap.set(oldGroup, crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + '-g-' + Math.random().toString(36).substr(2, 6)); normalized.groupId = groupMap.get(oldGroup); } else { normalized.groupId = null; }
+                                normalized._oldRootId = rawExp.recurringRootId || rawExp.sourceId || null;
+                                return normalized;
+                            }).filter(Boolean);
+                            sanitizedExpenses.forEach(exp => { if (exp._oldRootId) exp.recurringRootId = idMap.get(String(exp._oldRootId)) || undefined; else exp.recurringRootId = undefined; delete exp._oldRootId; });
+                            const previousExpenses = expenses, previousBudget = monthlyBudget;
+                            try {
+                                expenses = sanitizedExpenses;
+                                if (backup.monthly_budget !== undefined) { monthlyBudget = Math.max(0, parseFloat(backup.monthly_budget) || 0); localStorage.setItem('monthly_budget', monthlyBudget); document.getElementById('input-budget').value = monthlyBudget || ''; }
+                                saveToLocalStorage(true); renderUI();
+                                showToast(`${expenses.length} ${STRINGS[currentLang].toastImported}`, 'success');
+                            } catch (saveErr) { expenses = previousExpenses; monthlyBudget = previousBudget; localStorage.setItem('monthly_budget', previousBudget); document.getElementById('input-budget').value = previousBudget || ''; showToast(currentLang === 'es' ? 'Fallo al importar — tus datos no fueron modificados.' : 'Import failed — your data was not changed.', 'error'); }
+                        } catch (err) { showToast(STRINGS[currentLang].toastReadError, 'error'); }
+                        input.value = ''; input.onchange = null;
+                    };
+                    reader.readAsText(file);
+                };
+                input.click();
+            }, 250);
+        };
+
+        const importFromJSON = () => {
+            if (expenses.length > 0) {
+                const autoBackup = {
+                    exported_at: new Date().toISOString(),
+                    monthly_budget: monthlyBudget,
+                    expenses,
+                    _meta: 'auto_backup_before_import'
+                };
+                try {
+                    localStorage.setItem('pre_import_backup', JSON.stringify(autoBackup));
+                } catch (e) { }
+            }
+            openImportConfirm();
+        };
+
+        const buildBackupJSON = () => {
+            return JSON.stringify({ exported_at: new Date().toISOString(), monthly_budget: monthlyBudget, expenses }, null, 2);
+        };
+
+        const writeToFileHandle = async () => {
+            if (!autoSaveFileHandle) return;
+            try {
+                const writable = await autoSaveFileHandle.createWritable();
+                await writable.write(buildBackupJSON());
+                await writable.close();
+                lastAutoSaveTime = Date.now();
+                updateAutoSaveStatusText();
+                changesSinceBackup = 0;
+                localStorage.setItem('changes_since_backup', '0');
+            } catch (err) {
+                console.error('Auto-save write error:', err);
+                deactivateAutoSave();
+                showToast(STRINGS[currentLang].autoSaveError, 'error');
+            }
+        };
+
+        const activateAutoSave = async () => {
+            if (!supportsFileSystemAccess) {
+                showToast(STRINGS[currentLang].autoSaveNotSupported, 'warning');
+                return;
+            }
+            try {
+                autoSaveFileHandle = await window.showSaveFilePicker({
+                    suggestedName: `Gastos_autobackup.json`,
+                    types: [{
+                        description: 'JSON Backup',
+                        accept: { 'application/json': ['.json'] }
+                    }]
+                });
+
+                await writeToFileHandle();
+                autoSaveInterval = setInterval(() => writeToFileHandle(), 5 * 60 * 1000);
+
+                const btn = document.getElementById('btn-autosave');
+                btn.className = 'flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm hover:bg-emerald-100 dark:hover:bg-emerald-900/40 h-[42px]';
+                document.getElementById('autosave-label').innerHTML = `${STRINGS[currentLang].autoSaveOn} <span class="autosave-dot inline-block w-2 h-2 rounded-full bg-emerald-500 ml-1"></span>`;
+
+                autoSaveStatusInterval = setInterval(updateAutoSaveStatusText, 60000);
+
+                showToast(STRINGS[currentLang].autoSaveActivated, 'success');
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    console.error('Auto-save activation error:', err);
+                    showToast(STRINGS[currentLang].autoSaveError, 'error');
+                }
+            }
+        };
+
+        const deactivateAutoSave = () => {
+            autoSaveFileHandle = null;
+            if (autoSaveInterval) { clearInterval(autoSaveInterval); autoSaveInterval = null; }
+            if (autoSaveStatusInterval) { clearInterval(autoSaveStatusInterval); autoSaveStatusInterval = null; }
+            lastAutoSaveTime = null;
+
+            const btn = document.getElementById('btn-autosave');
+            btn.className = 'flex items-center gap-2 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 px-4 py-2.5 rounded-lg font-medium transition-colors shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 h-[42px]';
+            document.getElementById('autosave-label').textContent = STRINGS[currentLang].autoSaveOff;
+        };
+
+        const toggleAutoSave = () => {
+            if (autoSaveFileHandle) {
+                deactivateAutoSave();
+                showToast(STRINGS[currentLang].autoSaveDeactivated, 'info');
+            } else {
+                activateAutoSave();
+            }
+        };
+
+        const updateAutoSaveStatusText = () => {
+            if (!autoSaveFileHandle || !lastAutoSaveTime) return;
+            const S = STRINGS[currentLang];
+            const elapsed = Math.floor((Date.now() - lastAutoSaveTime) / 60000);
+            let statusText;
+            if (elapsed < 1) statusText = S.autoSaveJustNow;
+            else statusText = `${elapsed} ${S.autoSaveMinAgo}`;
+
+            const btn = document.getElementById('btn-autosave');
+            btn.title = `${S.autoSaveLastSaved}: ${statusText}`;
+        };
+
+        const checkBackupReminder = () => {
+            if (autoSaveFileHandle) return;
+
+            const banner = document.getElementById('backup-reminder-banner');
+            const timeSinceBackup = Date.now() - lastManualBackupTime;
+            const thirtyMinutes = 30 * 60 * 1000;
+
+            if ((changesSinceBackup >= 10 || (lastManualBackupTime > 0 && timeSinceBackup > thirtyMinutes)) && changesSinceBackup > 0) {
+                banner.className = 'flex items-center gap-3 p-4 rounded-xl border font-medium text-sm bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400';
+            }
+        };
+
+        const dismissBackupReminder = () => {
+            document.getElementById('backup-reminder-banner').className = 'hidden items-center gap-3 p-4 rounded-xl border font-medium text-sm bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400';
+            lastManualBackupTime = Date.now();
+            localStorage.setItem('last_manual_backup', lastManualBackupTime);
+        };
+
+        setInterval(checkBackupReminder, 5 * 60 * 1000);
+
+        /* =====================================================================
+         * SISTEMA DE NOTIFICACIONES PWA
+         * ===================================================================== */
+
+        let notificationsEnabled = localStorage.getItem('notifications_enabled') === 'true';
+        let notifCheckInterval = null;
+
+        const updateNotifButton = () => {
+            const btn = document.getElementById('btn-notifications');
+            const badge = document.getElementById('notif-badge');
+            if (notificationsEnabled && Notification.permission === 'granted') {
+                btn.className = 'relative p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors shadow-sm flex items-center justify-center w-[42px] h-[42px]';
+                btn.innerHTML = `<i data-lucide="bell-ring" id="notif-icon" class="w-5 h-5"></i><span id="notif-badge" class="hidden absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-slate-800"></span>`;
+            } else {
+                btn.className = 'relative p-2.5 rounded-lg bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm flex items-center justify-center w-[42px] h-[42px]';
+                btn.innerHTML = `<i data-lucide="bell-off" id="notif-icon" class="w-5 h-5"></i><span id="notif-badge" class="hidden absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-slate-800"></span>`;
+            }
+            lucide.createIcons();
+        };
+
+        const getDueAndOverdueExpenses = () => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+            const dueToday = [];
+            const overdue = [];
+
+            expenses.forEach(exp => {
+                if (exp.status === 'Pendiente') {
+                    const expDate = new Date(exp.dueDate + 'T12:00:00');
+                    expDate.setHours(0, 0, 0, 0);
+                    if (exp.dueDate === todayStr) {
+                        dueToday.push(exp);
+                    } else if (expDate < today) {
+                        overdue.push(exp);
+                    }
+                }
+            });
+
+            return { dueToday, overdue };
+        };
+
+        const getNotifiedToday = () => {
+            try {
+                const data = JSON.parse(localStorage.getItem('notified_expenses') || '{}');
+                const todayStr = new Date().toISOString().split('T')[0];
+                if (data.date !== todayStr) return { date: todayStr, ids: [] };
+                return data;
+            } catch { return { date: new Date().toISOString().split('T')[0], ids: [] }; }
+        };
+
+        const markAsNotified = (expenseIds) => {
+            const data = getNotifiedToday();
+            expenseIds.forEach(id => {
+                if (!data.ids.includes(id)) data.ids.push(id);
+            });
+            localStorage.setItem('notified_expenses', JSON.stringify(data));
+        };
+
+        const sendNotification = (title, body, tag) => {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                    type: 'SHOW_NOTIFICATION',
+                    title,
+                    body,
+                    tag
+                });
+            } else {
+                try {
+                    new Notification(title, {
+                        body,
+                        icon: '/icons/icon-192.png',
+                        badge: '/icons/icon-192.png',
+                        tag,
+                        requireInteraction: true,
+                        vibrate: [200, 100, 200]
+                    });
+                } catch (e) { console.warn('Notification error:', e); }
+            }
+        };
+
+        const checkAndNotify = () => {
+            if (!notificationsEnabled || Notification.permission !== 'granted') return;
+
+            const { dueToday, overdue } = getDueAndOverdueExpenses();
+            const notified = getNotifiedToday();
+            const S = STRINGS[currentLang];
+
+            const newDueToday = dueToday.filter(e => !notified.ids.includes(e.id));
+            const newOverdue = overdue.filter(e => !notified.ids.includes(e.id));
+
+            const allNew = [...newDueToday, ...newOverdue];
+            if (allNew.length === 0) return;
+
+            // Update badge
+            const badge = document.getElementById('notif-badge');
+            if (badge) { badge.classList.remove('hidden'); }
+
+            if (allNew.length === 1) {
+                const exp = allNew[0];
+                const isDue = newDueToday.includes(exp);
+                const title = isDue ? S.notifDueTitle : S.notifOverdueTitle;
+                const bodyText = isDue ? S.notifDueBody : S.notifOverdueBody;
+                sendNotification(title, `${exp.product} ${bodyText} ${formatCurrency(exp.amount)}`, `expense-${exp.id}`);
+            } else if (allNew.length <= 3) {
+                allNew.forEach(exp => {
+                    const isDue = newDueToday.includes(exp);
+                    const title = isDue ? S.notifDueTitle : S.notifOverdueTitle;
+                    const bodyText = isDue ? S.notifDueBody : S.notifOverdueBody;
+                    sendNotification(title, `${exp.product} ${bodyText} ${formatCurrency(exp.amount)}`, `expense-${exp.id}`);
+                });
+            } else {
+                sendNotification(S.notifMultipleTitle, `${allNew.length} ${S.notifMultipleBody}`, 'expense-batch');
+            }
+
+            markAsNotified(allNew.map(e => e.id));
+        };
+
+        const startNotifChecks = () => {
+            if (notifCheckInterval) clearInterval(notifCheckInterval);
+            checkAndNotify();
+            // Check every 30 minutes
+            notifCheckInterval = setInterval(checkAndNotify, 30 * 60 * 1000);
+        };
+
+        const stopNotifChecks = () => {
+            if (notifCheckInterval) { clearInterval(notifCheckInterval); notifCheckInterval = null; }
+        };
+
+        const toggleNotifications = async () => {
+            const S = STRINGS[currentLang];
+
+            if (!('Notification' in window)) {
+                showToast(S.notifNotSupported, 'error');
+                return;
+            }
+
+            if (notificationsEnabled) {
+                notificationsEnabled = false;
+                localStorage.setItem('notifications_enabled', 'false');
+                stopNotifChecks();
+                updateNotifButton();
+                showToast(S.notifDisabled, 'info');
+                return;
+            }
+
+            if (Notification.permission === 'denied') {
+                showToast(S.notifDenied, 'error');
+                return;
+            }
+
+            let permission = Notification.permission;
+            if (permission !== 'granted') {
+                permission = await Notification.requestPermission();
+            }
+
+            if (permission === 'granted') {
+                notificationsEnabled = true;
+                localStorage.setItem('notifications_enabled', 'true');
+                updateNotifButton();
+                startNotifChecks();
+                showToast(S.notifEnabled, 'success');
+
+                // Show PWA install hint if not already installed
+                if (!window.matchMedia('(display-mode: standalone)').matches) {
+                    setTimeout(() => showToast(S.notifInstallPWA, 'info'), 2000);
+                }
+            } else {
+                showToast(S.notifDenied, 'error');
+            }
+        };
+
+        // Re-check when tab becomes visible again
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && notificationsEnabled) {
+                checkAndNotify();
+            }
+        });
+
+        // Also re-check when focus returns
+        window.addEventListener('focus', () => {
+            if (notificationsEnabled) {
+                checkAndNotify();
+            }
+        });
+
+        /* =====================================================================
+         * REGISTRO DEL SERVICE WORKER + PWA
+         * ===================================================================== */
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                try {
+                    const reg = await navigator.serviceWorker.register('sw.js');
+                    console.log('Service Worker registrado:', reg.scope);
+
+                    // Try Periodic Background Sync for notification checks
+                    if ('periodicSync' in reg) {
+                        try {
+                            const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+                            if (status.state === 'granted') {
+                                await reg.periodicSync.register('check-due-expenses', {
+                                    minInterval: 60 * 60 * 1000 // Every hour
+                                });
+                                console.log('Periodic Sync registrado');
+                            }
+                        } catch (e) { console.log('Periodic Sync no disponible:', e); }
+                    }
+                } catch (err) {
+                    console.warn('Error registrando Service Worker:', err);
+                }
+            });
+
+            // Listen for messages from the SW
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'CHECK_EXPENSES') {
+                    checkAndNotify();
+                }
+            });
+        }
+
+        // PWA Install prompt
+        let deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+        });
+
+        /* =====================================================================
+         * INICIALIZACIÓN
+         * ===================================================================== */
+
+        // Init notification system
+        if (notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
+            startNotifChecks();
+        }
+        updateNotifButton();
+
+        updateMonthDropdown();
+        applyLanguage();
+        setTrendsRange(6);
+        checkBackupReminder();
+    </script>
+</body>
+</html>
